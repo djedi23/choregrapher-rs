@@ -1,0 +1,8 @@
+debug = true
+[database]
+url = "mongodb://localhost:27017"
+database = "test"
+
+[rabbitmq]
+url = "amqp://admin:admin@127.0.0.1:5672/%2f"
+#prefetch_count = 1024

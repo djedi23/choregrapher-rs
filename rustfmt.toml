@@ -1,0 +1,5 @@
+tab_spaces=2
+edition="2018"
+max_width=102
+newline_style="Unix"
+#merge_imports=true

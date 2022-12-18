@@ -1,0 +1,3 @@
+[workspace]
+members = ["node-rs","field_accessor_derive","cli"]
+

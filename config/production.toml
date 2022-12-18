@@ -1,0 +1,7 @@
+[database]
+url = "mongodb://db:27017"
+
+
+[rabbitmq]
+url = "amqp://admin:admin@rabbitmq:5672/%2f"
+

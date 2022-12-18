@@ -1,0 +1,25 @@
+[package]
+name = "dancer"
+version = "0.1.0"
+authors = ["djedi <moise.valvassori@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+node-rs = { path="../node-rs" }
+clap = { version = "3", features = ["derive"] }
+clap_complete = "3"
+anyhow = "1.0"
+indicatif = "0.15.0"
+log = "^0.4"
+pretty_env_logger = "^0.4"
+
+futures = "^0.3"
+futures-executor = "^0.3"
+mongodb = { version="=1.1.1" , features = ["async-std-runtime"], default-features = false} # git= "https://github.com/mongodb/mongo-rust-driver"
+bson = {version= "1.1.0", features = ['u2i'] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = {version="^0.4", features = ["serde"]}
+mongodb-gridfs = {version="0.1.2", features = ["async-std-runtime"], default-features = false }

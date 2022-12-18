@@ -1,0 +1,73 @@
+use crate::{choregraphy::ChoregraphyProcessOptions, Opts};
+use anyhow::{Context, Error, Result};
+use bson::{doc, DateTime};
+use chrono::SecondsFormat;
+use core::fmt;
+use futures::stream::StreamExt;
+use futures_executor::LocalPool;
+use indicatif::ProgressBar;
+use mongodb::options::FindOptions;
+use node_rs::{db::get_collection, settings::Settings};
+use serde::Deserialize;
+
+#[derive(Deserialize, Debug)]
+pub(crate) struct Process {
+  #[serde(rename(deserialize = "processId"))]
+  pub(crate) process_id: String,
+  pub(crate) timestamp: DateTime,
+}
+
+impl fmt::Display for Process {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    write!(
+      f,
+      "{:<36} {:<26}",
+      self.process_id,
+      self.timestamp.to_rfc3339_opts(SecondsFormat::Millis, true)
+    )
+  }
+}
+
+pub(crate) fn process(
+  process_opts: &ChoregraphyProcessOptions,
+  _opt: &Opts,
+  settings: &Settings,
+) -> Result<()> {
+  let mut executor = LocalPool::new();
+  executor.run_until(async {
+    let spin = ProgressBar::new_spinner();
+    spin.enable_steady_tick(150);
+    spin.set_message("Fetching processes");
+    let collection = get_collection(settings).await.context("Accessing mongo")?;
+    let mut options = FindOptions::default();
+    if process_opts.time {
+      options.sort = Some(doc! {"timestamp": ( if process_opts.reverse {1} else {-1}) })
+    } else {
+      options.sort = Some(doc! {"processId": ( if process_opts.reverse {-1} else {1}) })
+    }
+
+    let mut cursor = collection
+      .find(doc! {"graphId": &process_opts.graph}, options)
+      .await
+      .context("Can't fetch the choregraphies list.")?;
+    spin.finish_and_clear();
+
+    if _opt.verbose > 0 || process_opts.verbose {
+      println!("{:<36} {:<26}", "PROCESS ID", "CREATED");
+    }
+    while let Some(result) = cursor.next().await {
+      match result {
+        Ok(document) => {
+          let process: Process = bson::from_document(document).context("Can't decode the process")?;
+          if _opt.verbose > 0 || process_opts.verbose {
+            println!("{}", process);
+          } else {
+            println!("{}", process.process_id);
+          }
+        }
+        Err(e) => return Err(e.into()),
+      }
+    }
+    Ok::<(), Error>(())
+  })
+}

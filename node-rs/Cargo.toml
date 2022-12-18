@@ -1,0 +1,29 @@
+[package]
+name = "node-rs"
+version = "0.1.0"
+authors = ["djedi <moise.valvassori@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+field_accessor_derive = {version= "0.1.0", path = "../field_accessor_derive" }
+anyhow = "1.0"
+#tokio = "=0.2.13"
+lapin = { version = "1.2.1" }
+futures = "^0.3"
+log = "^0.4"
+pretty_env_logger = "^0.4"
+futures-executor = "^0.3"
+futures-util = "^0.3"
+mongodb = { version="1.1.1" , features = ["async-std-runtime"], default-features = false} # git= "https://github.com/mongodb/mongo-rust-driver"
+bson = {version= "1.1.0", features = ['u2i'] }
+config = "0.11.0"
+serde = { version = "1.0", features = ["derive", "rc"] }
+serde_json = "1.0"
+chrono = {version="^0.4", features = ["serde"]}
+async-std = "1.5.0" 
+lazy_static = "1.4.0"
+uuid = { version = "0.8", features = ["serde", "v4"] }
+yansi = "0.5.0"
+openssl = { version = "0.10", features = ["vendored"] }

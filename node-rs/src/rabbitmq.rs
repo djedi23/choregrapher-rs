@@ -1,0 +1,245 @@
+use crate::{
+  context::Context,
+  db,
+  fetchparameter::fetch_parameter,
+  flow_message::PartialFlowMessage,
+  graph::{InputRef, Node, Relation},
+  output_processor::OutputProcessing,
+  process_output::process_output,
+  settings::Settings,
+};
+use bson::doc;
+use futures::Future;
+use futures_executor::LocalSpawner;
+use futures_util::{stream::StreamExt, task::LocalSpawnExt};
+use lapin::{
+  options::{
+    BasicAckOptions, BasicConsumeOptions, BasicPublishOptions, BasicQosOptions,
+    ExchangeDeclareOptions, QueueBindOptions, QueueDeclareOptions,
+  },
+  publisher_confirm::Confirmation,
+  types::FieldTable,
+  BasicProperties, Channel, Connection, ConnectionProperties, Error, ExchangeKind,
+};
+use log::{debug, info, trace};
+
+use serde::{de::DeserializeOwned, Serialize};
+use std::{collections::HashMap, fmt::Debug, rc::Rc};
+
+lazy_static! {
+  static ref SETTINGS: Settings = Settings::new().unwrap();
+  static ref CONNECTION: Connection = Connection::connect(
+    &std::env::var("AMQP_ADDR").unwrap_or_else(|_| SETTINGS.rabbitmq.url.clone()),
+    ConnectionProperties::default()
+  )
+  .wait()
+  .unwrap();
+}
+
+pub trait FieldAccessor {
+  fn field_list(self) -> Vec<String>;
+  /// Return a string representation of the field
+  ///
+  fn field(self) -> Vec<String>;
+}
+
+pub async fn create_rabbit_mq(exchange_suffix: &str) -> Result<(Channel, Channel), Error> {
+  // let rabbitmq_url = std::env::var("AMQP_ADDR").unwrap_or_else(|_| settings.rabbitmq.url.clone());
+  // let conn = Connection::connect(&rabbitmq_url, ConnectionProperties::default()).await?;
+
+  info!("CONNECTED");
+
+  let channel = CONNECTION.create_channel().await?;
+  let channel_out = CONNECTION.create_channel().await?;
+  let exchange_name = (SETTINGS.rabbitmq.exchange_name.to_owned()) + "_" + exchange_suffix;
+
+  debug!("rabbitmq.exchange_name = {}", &exchange_name);
+
+  let exchange_declare_options = ExchangeDeclareOptions {
+    durable: true,
+    ..Default::default()
+  }; // ExchangeDeclareOptions::default();
+     //  exchange_declare_options.durable = true;
+     // partof: #SPC-rabbitmq.exchange
+  channel
+    .exchange_declare(
+      &exchange_name,
+      ExchangeKind::Topic,
+      exchange_declare_options,
+      FieldTable::default(),
+    )
+    .await?;
+
+  // partof: #SPC-rabbitmq.prefetch
+  channel
+    .basic_qos(SETTINGS.rabbitmq.prefetch_count, BasicQosOptions::default())
+    .await?;
+
+  //    info!("Declared queue {:?}", queue);
+
+  Ok((channel, channel_out))
+}
+
+#[rustfmt::skip::macros(doc)]
+#[allow(clippy::too_many_arguments)]
+pub async fn create_consumer<'de, Action, T, R, O, F>(
+  channel: &Channel,
+  channel_out: &Channel,
+  spawner: &LocalSpawner,
+  destination_map: &HashMap<String, Vec<InputRef>>,
+  origin_map: &HashMap<String, Vec<Relation>>,
+  graph_id: &str,
+  node: &Node,
+  action: Action,
+  output_processor: Box<impl OutputProcessing<INPUT = R, OUTPUT = O> + ?Sized + 'static>,
+) where
+  T: Debug + DeserializeOwned,
+  R: Debug + Serialize + FieldAccessor + Clone,
+  O: Debug + Serialize + FieldAccessor + Clone,
+  F: Future<Output = (Option<R>, Rc<Context>)>,
+  Action: Fn(T, Rc<Context>) -> F + 'static,
+{
+  let queue_declare_options = QueueDeclareOptions {
+    durable: true,
+    ..Default::default()
+  };
+  let queue_name = SETTINGS.rabbitmq.queue_name.clone() + "_" + &node.id;
+  let exchange_name = (SETTINGS.rabbitmq.exchange_name.to_owned()) + "_" + graph_id;
+  // partof: #SPC-rabbitmq #SPC-rabbitmq.nodeHaveQueue
+  channel
+    .queue_declare(&queue_name, queue_declare_options, FieldTable::default())
+    .await
+    .unwrap();
+
+  for input in &node.input {
+    // partof: #SPC-rabbitmq.inputBindTopic
+    channel
+      .queue_bind(
+        &queue_name,
+        &exchange_name,
+        &(SETTINGS.rabbitmq.routing_key.clone() + "." + &node.id + "_" + input),
+        QueueBindOptions::default(),
+        FieldTable::default(),
+      )
+      .await
+      .unwrap();
+  }
+
+  let mut consumer = channel
+    .clone()
+    .basic_consume(
+      &queue_name,
+      &node.name, // FIXME: ensure the tag is unique
+      BasicConsumeOptions::default(),
+      FieldTable::default(),
+    )
+    .await
+    .unwrap();
+
+  //  let channel2 = channel.clone();
+  let channel_out2 = channel_out.clone();
+  let node = node.clone();
+  let destination_map = destination_map.clone();
+  let origin_map = origin_map.clone();
+  let graph_id = graph_id.to_owned();
+  spawner
+    .spawn_local(async move {
+      info!("will consume");
+
+      let events_collection = db::get_events_collection(&SETTINGS).await.unwrap();
+
+      while let Some(delivery) = consumer.next().await {
+        // partof: #SPC-processing
+        let (channel, delivery) = delivery.expect("error caught in consumer"); // TODO anyhow
+        trace!(
+          "Consume [ {} ] {:?} {:?}",
+          queue_name,
+          delivery,
+          String::from_utf8(delivery.data.clone())
+        );
+
+        let mut relation = None;
+        for relationf in origin_map.get(&delivery.routing_key.to_string()).unwrap() {
+          if relationf.to.node == node.id {
+            relation = Some(relationf);
+            break;
+          }
+        }
+        let relation: Relation = relation.unwrap().clone();
+
+        let mut data: PartialFlowMessage = serde_json::from_slice(&delivery.data).unwrap();
+        debug!("Data {:?}", data);
+
+        // partof: #SPC-processing.missingInput
+        fetch_parameter(
+          &data.process_id,
+          &node,
+          &mut data.parameter,
+          &origin_map,
+          &events_collection,
+        )
+        .await;
+
+        // partof: #SPC-processing.actionContext
+        let context = Context {
+          process_id: data.process_id.clone(),
+          relation,
+          context: data.context.clone().unwrap_or_default(),
+        };
+
+        // partof: #SPC-processing.callAction
+        let (result, context): (Option<R>, Rc<Context>) = action(
+          serde_json::from_value::<T>(data.parameter).unwrap(),
+          Rc::new(context),
+        )
+        .await;
+
+        process_output(
+          result,
+          context,
+          &graph_id,
+          &data.process_id,
+          &node,
+          &destination_map,
+          &channel_out2,
+          &output_processor,
+          &events_collection,
+        )
+        .await;
+        channel
+          .basic_ack(delivery.delivery_tag, BasicAckOptions::default())
+          .await
+          .expect("ack");
+      }
+    })
+    .unwrap();
+}
+
+pub async fn send_message(
+  channel: &Channel,
+  graph_id: &str,
+  topic: &str,
+  payload: Vec<u8>,
+) -> lapin::Result<Confirmation> {
+  let publish_properties = BasicProperties::default();
+  let publish_properties = publish_properties.with_delivery_mode(2);
+  let exchange_name = (SETTINGS.rabbitmq.exchange_name.to_owned()) + "_" + graph_id;
+  trace!(
+    "Send Message [ {} : {} ] {:?} {:?}",
+    &exchange_name,
+    topic,
+    String::from_utf8(payload.clone()),
+    channel
+  );
+
+  channel
+    .basic_publish(
+      &exchange_name,
+      topic,
+      BasicPublishOptions::default(),
+      payload,
+      publish_properties,
+    )
+    .await?
+    .await
+}

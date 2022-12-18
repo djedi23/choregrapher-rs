@@ -1,0 +1,17 @@
+debug = false
+starting_node_id = "start"
+
+
+[database]
+database = "choregrapher"
+collection = "runs"
+events_collection = "events"
+graphes_collection = "graph"
+files_bucket = "choregrapher"
+
+
+[rabbitmq]
+exchange_name = "flow"
+prefetch_count = 8
+queue_name = "flow_queue"
+routing_key = "flow"

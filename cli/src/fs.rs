@@ -2,10 +2,7 @@ use crate::Opts;
 use anyhow::{Context, Error, Result};
 use bson::{doc, oid::ObjectId, DateTime};
 use chrono::SecondsFormat;
-use clap::Parser;
-use clap::ValueHint;
-use futures::stream::StreamExt;
-use futures_executor::LocalPool;
+use clap::{Parser, ValueHint};
 use indicatif::{ProgressBar, ProgressStyle};
 use mongodb_gridfs::{
   options::{GridFSBucketOptions, GridFSFindOptions, GridFSUploadOptions, ProgressUpdate},
@@ -13,8 +10,12 @@ use mongodb_gridfs::{
 };
 use node_rs::{db::get_database, settings::Settings};
 use serde::Deserialize;
-use std::io::stdout;
-use std::{fmt, fs::File, io::Write};
+use std::{
+  fmt,
+  fs::File,
+  io::{stdout, Write},
+};
+use tokio_stream::StreamExt;
 
 #[derive(Parser, Debug)]
 pub(crate) struct FsOptions {
@@ -79,11 +80,11 @@ pub(crate) struct GetOptions {
   outputs: Vec<String>,
 }
 
-pub(crate) fn fs(fs_opts: &FsOptions, _opt: &Opts, settings: &Settings) -> Result<()> {
+pub(crate) async fn fs(fs_opts: &FsOptions, _opt: &Opts, settings: &Settings) -> Result<()> {
   match &fs_opts.command {
-    FsSubCommand::Ls(opts) => ls(opts, settings),
-    FsSubCommand::Put(opts) => put(opts, settings),
-    FsSubCommand::Get(opts) => get(opts, settings),
+    FsSubCommand::Ls(opts) => ls(opts, settings).await,
+    FsSubCommand::Put(opts) => put(opts, settings).await,
+    FsSubCommand::Get(opts) => get(opts, settings).await,
   }
 }
 
@@ -122,183 +123,172 @@ impl ProgressUpdate for Progression {
   }
 }
 
-fn ls(opts: &LsOptions, settings: &Settings) -> Result<()> {
-  let mut executor = LocalPool::new();
-  //  let spawner = executor.spawner();
-  executor.run_until(async {
-    let spin = ProgressBar::new_spinner();
-    spin.enable_steady_tick(150);
-    spin.set_message("Fetching files");
-    let db = get_database(settings).await.context("Accessing mongo")?;
-    let bucket = GridFSBucket::new(
-      db,
-      Some(
-        GridFSBucketOptions::builder()
-          .bucket_name(settings.database.files_bucket.clone())
-          .build(),
-      ),
-    );
+async fn ls(opts: &LsOptions, settings: &Settings) -> Result<()> {
+  let spin = ProgressBar::new_spinner();
+  spin.enable_steady_tick(150);
+  spin.set_message("Fetching files");
+  let db = get_database(settings).await.context("Accessing mongo")?;
+  let bucket = GridFSBucket::new(
+    db,
+    Some(
+      GridFSBucketOptions::builder()
+        .bucket_name(settings.database.files_bucket.clone())
+        .build(),
+    ),
+  );
 
-    let mut options = GridFSFindOptions::default();
-    if opts.size {
-      options.sort = Some(doc! {"length": ( if opts.reverse {1} else {-1}) })
-    } else if opts.time {
-      options.sort = Some(doc! {"uploadDate": ( if opts.reverse {1} else {-1}) })
-    } else {
-      options.sort = Some(doc! {"filename": ( if opts.reverse {-1} else {1}) })
-    }
+  let mut options = GridFSFindOptions::default();
+  if opts.size {
+    options.sort = Some(doc! {"length": ( if opts.reverse {1} else {-1}) })
+  } else if opts.time {
+    options.sort = Some(doc! {"uploadDate": ( if opts.reverse {1} else {-1}) })
+  } else {
+    options.sort = Some(doc! {"filename": ( if opts.reverse {-1} else {1}) })
+  }
 
-    let mut cursor = bucket
-      .find(doc! {}, options)
-      .await
-      .context("Can't fetch the file list.")?;
-    spin.finish_and_clear();
+  let mut cursor = bucket
+    .find(doc! {}, options)
+    .await
+    .context("Can't fetch the file list.")?;
+  spin.finish_and_clear();
 
-    while let Some(result) = cursor.next().await {
-      match result {
-        Ok(document) => {
-          let file: GridFile = bson::from_document(document).context("Can't decode the files")?;
-          if opts.long {
-            println!("{}", file);
-          } else {
-            println!("{}", file._id);
-          }
+  while let Some(result) = cursor.next().await {
+    match result {
+      Ok(document) => {
+        let file: GridFile = bson::from_document(document).context("Can't decode the files")?;
+        if opts.long {
+          println!("{}", file);
+        } else {
+          println!("{}", file._id);
         }
-        Err(e) => return Err(e.into()),
       }
+      Err(e) => return Err(e.into()),
     }
-    Ok::<(), Error>(())
-  })
+  }
+  Ok::<(), Error>(())
 }
 
-fn put(opts: &PutOptions, settings: &Settings) -> Result<()> {
-  let mut executor = LocalPool::new();
-  //  let spawner = executor.spawner();
-  executor.run_until(async {
-    let spin = ProgressBar::new_spinner();
+async fn put(opts: &PutOptions, settings: &Settings) -> Result<()> {
+  let spin = ProgressBar::new_spinner();
+  spin.enable_steady_tick(150);
+  spin.set_message("Connecting");
+  let db = get_database(settings).await.context("Accessing mongo")?;
+  let bucket = GridFSBucket::new(
+    db,
+    Some(
+      GridFSBucketOptions::builder()
+        .bucket_name(settings.database.files_bucket.clone())
+        .build(),
+    ),
+  );
+  spin.finish_and_clear();
+
+  for filename in opts.files.clone() {
+    let metadate = std::fs::metadata(&filename)?;
+    let spin = ProgressBar::new(metadate.len());
+    spin.set_style(
+      ProgressStyle::default_bar()
+        .template("{msg} [{wide_bar}] {bytes}/{total_bytes} ({elapsed}/{eta})")
+        .progress_chars("=> "),
+    );
+    spin.set_message(&filename);
+    let file = File::open(&filename).context(format!("Opening file \"{}\"", &filename))?;
+    let id = bucket
+      .clone()
+      .upload_from_stream(
+        &filename,
+        file,
+        Some(
+          GridFSUploadOptions::builder()
+            .progress_tick(Some(&Progression {
+              progress: spin.clone(),
+            }))
+            .build(),
+        ),
+      )
+      .await?;
+    spin.finish_and_clear();
+    println!("{}", id.to_hex());
+  }
+  Ok::<(), Error>(())
+}
+
+async fn get(opts: &GetOptions, settings: &Settings) -> Result<()> {
+  let mut spin = ProgressBar::hidden();
+  if !opts.quiet {
+    spin = ProgressBar::new_spinner();
     spin.enable_steady_tick(150);
     spin.set_message("Connecting");
-    let db = get_database(settings).await.context("Accessing mongo")?;
-    let bucket = GridFSBucket::new(
-      db,
-      Some(
-        GridFSBucketOptions::builder()
-          .bucket_name(settings.database.files_bucket.clone())
-          .build(),
-      ),
-    );
-    spin.finish_and_clear();
-
-    for filename in opts.files.clone() {
-      let metadate = std::fs::metadata(&filename)?;
-      let spin = ProgressBar::new(metadate.len());
-      spin.set_style(
-        ProgressStyle::default_bar()
-          .template("{msg} [{wide_bar}] {bytes}/{total_bytes} ({elapsed}/{eta})")
-          .progress_chars("=> "),
-      );
-      spin.set_message(&filename);
-      let file = File::open(&filename).context(format!("Opening file \"{}\"", &filename))?;
-      let id = bucket
-        .clone()
-        .upload_from_stream(
-          &filename,
-          file,
-          Some(
-            GridFSUploadOptions::builder()
-              .progress_tick(Some(&Progression {
-                progress: spin.clone(),
-              }))
-              .build(),
-          ),
-        )
-        .await?;
-      spin.finish_and_clear();
-      println!("{}", id.to_hex());
-    }
-    Ok::<(), Error>(())
-  })
-}
-
-fn get(opts: &GetOptions, settings: &Settings) -> Result<()> {
-  let mut executor = LocalPool::new();
-  executor.run_until(async {
-    let mut spin = ProgressBar::hidden();
-    if !opts.quiet {
-      spin = ProgressBar::new_spinner();
-      spin.enable_steady_tick(150);
-      spin.set_message("Connecting");
-    }
-    let db = get_database(settings).await.context("Accessing mongo")?;
-    let bucket = GridFSBucket::new(
-      db,
-      Some(
-        GridFSBucketOptions::builder()
-          .bucket_name(settings.database.files_bucket.clone())
-          .build(),
-      ),
-    );
-    spin.finish_and_clear();
-    let mut outputs_iter = opts.outputs.iter();
-    for id in opts.ids.clone() {
-      let file_document = bucket
-        .find(
-          doc! {"_id":ObjectId::with_string(&id).context("Incorrect object id format")?},
-          GridFSFindOptions::default(),
-        )
-        .await?
-        .next()
-        .await;
-      if let Some(file_document) = file_document {
-        let file_document = file_document?;
-        let mut filename = "/dev/null"; // FIXME
-        if !opts.stdout {
-          if let Some(output_filename) = outputs_iter.next() {
-            filename = output_filename;
-          } else {
-            filename = file_document
-              .get_str("filename")
-              .context(format!("Filename not found for document {:?}", id))?;
-          }
-        }
-        let mut spin = ProgressBar::hidden();
-        if !opts.quiet {
-          spin = ProgressBar::new(
-            file_document
-              .get_i64("length")
-              .context(format!("Size not found for document {:?}", id))? as u64,
-          );
-          spin.set_style(
-            ProgressStyle::default_bar()
-              .template("{msg} [{wide_bar}] {bytes}/{total_bytes} ({elapsed}/{eta})")
-              .progress_chars("=> "),
-          );
-          spin.set_message(filename);
-        }
-
-        let mut file = File::create(&filename).context(format!("Opening file \"{}\"", &filename))?;
-        let mut cursor = bucket
-          .open_download_stream(ObjectId::with_string(&id).context("Incorrect object id format")?)
-          .await?;
-        let mut position: u64 = 0;
-        while let Some(doc) = cursor.next().await {
-          if opts.stdout {
-            stdout()
-              .write_all(&doc)
-              .context("Can't write data to stdout")?;
-          } else {
-            file.write(&doc).context("Can't write data to file")?;
-          }
-          position += doc.len() as u64;
-          spin.set_position(position);
-        }
-        spin.finish_and_clear();
-        if !opts.stdout {
-          println!("{}", id);
+  }
+  let db = get_database(settings).await.context("Accessing mongo")?;
+  let bucket = GridFSBucket::new(
+    db,
+    Some(
+      GridFSBucketOptions::builder()
+        .bucket_name(settings.database.files_bucket.clone())
+        .build(),
+    ),
+  );
+  spin.finish_and_clear();
+  let mut outputs_iter = opts.outputs.iter();
+  for id in opts.ids.clone() {
+    let file_document = bucket
+      .find(
+        doc! {"_id":ObjectId::with_string(&id).context("Incorrect object id format")?},
+        GridFSFindOptions::default(),
+      )
+      .await?
+      .next()
+      .await;
+    if let Some(file_document) = file_document {
+      let file_document = file_document?;
+      let mut filename = "/dev/null"; // FIXME
+      if !opts.stdout {
+        if let Some(output_filename) = outputs_iter.next() {
+          filename = output_filename;
+        } else {
+          filename = file_document
+            .get_str("filename")
+            .context(format!("Filename not found for document {:?}", id))?;
         }
       }
+      let mut spin = ProgressBar::hidden();
+      if !opts.quiet {
+        spin = ProgressBar::new(
+          file_document
+            .get_i64("length")
+            .context(format!("Size not found for document {:?}", id))? as u64,
+        );
+        spin.set_style(
+          ProgressStyle::default_bar()
+            .template("{msg} [{wide_bar}] {bytes}/{total_bytes} ({elapsed}/{eta})")
+            .progress_chars("=> "),
+        );
+        spin.set_message(filename);
+      }
+
+      let mut file = File::create(filename).context(format!("Opening file \"{}\"", &filename))?;
+      let mut cursor = bucket
+        .open_download_stream(ObjectId::with_string(&id).context("Incorrect object id format")?)
+        .await?;
+      let mut position: u64 = 0;
+      while let Some(doc) = cursor.next().await {
+        if opts.stdout {
+          stdout()
+            .write_all(&doc)
+            .context("Can't write data to stdout")?;
+        } else {
+          file.write(&doc).context("Can't write data to file")?;
+        }
+        position += doc.len() as u64;
+        spin.set_position(position);
+      }
+      spin.finish_and_clear();
+      if !opts.stdout {
+        println!("{}", id);
+      }
     }
-    spin.finish_and_clear();
-    Ok::<(), Error>(())
-  })
+  }
+  spin.finish_and_clear();
+  Ok::<(), Error>(())
 }

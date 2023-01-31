@@ -15,7 +15,7 @@ use lapin::Channel;
 use log::trace;
 use mongodb::{options::UpdateModifications, Collection};
 use serde::Serialize;
-use std::{collections::HashMap, fmt::Debug, rc::Rc};
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 use yansi::Paint;
 
 lazy_static! {
@@ -25,13 +25,13 @@ lazy_static! {
 #[allow(clippy::borrowed_box, clippy::too_many_arguments)]
 pub async fn process_output<'a, R, O>(
   result: Option<R>,
-  context: Rc<Context>,
+  context: Arc<Context>,
   graph_id: &str,
   process_id: &str,
   node: &Node,
   destination_map: &'a HashMap<String, Vec<InputRef>>,
   channel: &Channel,
-  output_processor: &Box<impl OutputProcessing<INPUT = R, OUTPUT = O> + ?Sized + 'static>,
+  output_processor: &Arc<impl OutputProcessing<INPUT = R, OUTPUT = O> + ?Sized + 'static>,
   events_collection: &Collection,
 ) where
   R: Debug + Serialize + FieldAccessor + Clone,
@@ -113,7 +113,7 @@ pub async fn process_output<'a, R, O>(
         let payload = FlowMessage {
           process_id: process_id.to_string(),
           parameter: &route.payload,
-          context: Some(Rc::clone(&context).context.clone()),
+          context: Some(Arc::clone(&context).context.clone()),
         };
 
         // partof: #SPC-processing.sendOutput

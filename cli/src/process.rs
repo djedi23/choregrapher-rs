@@ -3,13 +3,11 @@ use anyhow::{Context, Result};
 use bson::{doc, Bson};
 use clap::Parser;
 use core::fmt;
-use futures::stream::StreamExt;
-use futures_executor::LocalPool;
 use indicatif::ProgressBar;
 use mongodb::options::FindOptions;
 use node_rs::{db::get_collection, flow_message::NodeOutput, settings::Settings};
-
 use std::fmt::Display;
+use tokio_stream::StreamExt;
 
 #[derive(Parser, Debug)]
 pub(crate) struct ProcessOptions {
@@ -59,13 +57,13 @@ pub struct ProcessOutputOptions {
   pub process: String,
 }
 
-pub(crate) fn process_options(
+pub(crate) async fn process_options(
   pr_opts: &ProcessOptions,
   opts: &Opts,
   settings: &Settings,
 ) -> Result<()> {
   match &pr_opts.command {
-    ProcessSubCommand::Output(options) => process_output(options, opts, settings),
+    ProcessSubCommand::Output(options) => process_output(options, opts, settings).await,
   }
 }
 
@@ -113,68 +111,65 @@ impl Display for ProcessOutputDisplay {
   }
 }
 
-pub(crate) fn process_output(
+pub(crate) async fn process_output(
   out_opts: &ProcessOutputOptions,
   opts: &Opts,
   settings: &Settings,
 ) -> Result<()> {
-  let mut executor = LocalPool::new();
-  executor.run_until(async {
-    let spin = ProgressBar::new_spinner();
-    spin.enable_steady_tick(150);
-    spin.set_message("Fetching processes");
-    let collection = get_collection(settings).await.context("Accessing mongo")?;
-    let projection = if out_opts.all {
-      doc! {"outputs":1, "parameters":-1}
-    } else {
-      doc! {"outputs":{"$slice":-1}, "parameters":-1}
-    };
+  let spin = ProgressBar::new_spinner();
+  spin.enable_steady_tick(150);
+  spin.set_message("Fetching processes");
+  let collection = get_collection(settings).await.context("Accessing mongo")?;
+  let projection = if out_opts.all {
+    doc! {"outputs":1, "parameters":-1}
+  } else {
+    doc! {"outputs":{"$slice":-1}, "parameters":-1}
+  };
 
-    let options = FindOptions::builder().projection(projection).build();
+  let options = FindOptions::builder().projection(projection).build();
 
-    let mut cursor = collection
-      .find(doc! {"processId": &out_opts.process}, options)
-      .await
-      .context("Can't fetch the choregraphies list.")?;
-    spin.finish_and_clear();
+  let mut cursor = collection
+    .find(doc! {"processId": &out_opts.process}, options)
+    .await
+    .context("Can't fetch the choregraphies list.")?;
+  spin.finish_and_clear();
 
-    if opts.verbose > 0 || out_opts.verbose {
-      println!(
-        "{:<36} {:<26}{:<17} OUTPUT",
-        "PROCESS ID", "TIMESTAMP", "NODE"
-      );
-    }
-    while let Some(result) = cursor.next().await {
-      match result {
-        Ok(document) => {
-          let output_doc = document
-            .get_array("outputs")
-            .context("Can't find the output in process document")?;
-          if out_opts.json {
-            let j = if out_opts.all {
-              serde_json::to_string_pretty(&output_doc)?
-            } else {
-              serde_json::to_string_pretty(&output_doc[0].as_document().unwrap())?
-            };
-            println!("{}", j);
+  if opts.verbose > 0 || out_opts.verbose {
+    println!(
+      "{:<36} {:<26}{:<17} OUTPUT",
+      "PROCESS ID", "TIMESTAMP", "NODE"
+    );
+  }
+  while let Some(result) = cursor.next().await {
+    match result {
+      Ok(document) => {
+        let output_doc = document
+          .get_array("outputs")
+          .context("Can't find the output in process document")?;
+        if out_opts.json {
+          let j = if out_opts.all {
+            serde_json::to_string_pretty(&output_doc)?
           } else {
-            for output_elt in output_doc {
-              let output: NodeOutput<Bson> =
-                bson::from_document(output_elt.as_document().unwrap().clone())
-                  .context("Can't decode the process output")?;
+            serde_json::to_string_pretty(&output_doc[0].as_document().unwrap())?
+          };
+          println!("{}", j);
+        } else {
+          for output_elt in output_doc {
+            let output: NodeOutput<Bson> =
+              bson::from_document(output_elt.as_document().unwrap().clone())
+                .context("Can't decode the process output")?;
 
-              if out_opts.verbose {
-                println!("{}", ProcessOutputVerboseDisplay::from(output));
-              } else {
-                println!("{}", ProcessOutputDisplay::from(output));
-              }
+            if out_opts.verbose {
+              println!("{}", ProcessOutputVerboseDisplay::from(output));
+            } else {
+              println!("{}", ProcessOutputDisplay::from(output));
             }
           }
         }
-        Err(e) => return Err(e.into()),
       }
+      Err(e) => return Err(e.into()),
     }
+  }
 
-    Ok(())
-  })
+  Ok(())
 }

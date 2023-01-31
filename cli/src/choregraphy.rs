@@ -58,15 +58,15 @@ pub struct ChoregraphyProcessOptions {
   pub verbose: bool,
 }
 
-pub(crate) fn choregraphy_options(
+pub(crate) async fn choregraphy_options(
   ch_opts: &ChoregraphyOptions,
   opts: &Opts,
   settings: &Settings,
 ) -> Result<()> {
   match &ch_opts.command {
-    ChoregraphySubCommand::Ls => ls(opts, settings),
-    ChoregraphySubCommand::Inspect(inspect_opts) => inspect(inspect_opts, opts, settings),
-    ChoregraphySubCommand::Process(_process_opts) => process(_process_opts, opts, settings),
+    ChoregraphySubCommand::Ls => ls(opts, settings).await,
+    ChoregraphySubCommand::Inspect(inspect_opts) => inspect(inspect_opts, opts, settings).await,
+    ChoregraphySubCommand::Process(_process_opts) => process(_process_opts, opts, settings).await,
   }
 }
 
@@ -80,14 +80,14 @@ pub(crate) struct Output {
 
 #[derive(Deserialize, Debug)]
 pub(crate) struct Input {
-  node: String,
-  input: String,
+  // node: String,
+  // input: String,
 }
 
 #[derive(Deserialize, Debug)]
 pub(crate) struct Edge {
   pub from: Output,
-  pub to: Input,
+  //  pub to: Input,
 }
 
 #[derive(Deserialize, Debug)]
@@ -96,8 +96,8 @@ pub(crate) struct Choregraphy {
   pub(crate) version: String,
   #[serde(rename(deserialize = "createdAt"))]
   pub(crate) created_at: DateTime,
-  #[serde(rename(deserialize = "modifiedAt"))]
-  modified_at: DateTime,
+  // #[serde(rename(deserialize = "modifiedAt"))]
+  // modified_at: DateTime,
 
   // #[serde(skip)]
   // startingParameters: String,

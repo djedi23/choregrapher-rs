@@ -5,6 +5,7 @@ mod choregraphy_process;
 mod fs;
 mod inject;
 mod process;
+
 use anyhow::{Context, Result};
 use choregraphy::{choregraphy_options, ChoregraphyOptions};
 use clap::{App, IntoApp, Parser};
@@ -118,7 +119,8 @@ fn print_completions<G: Generator>(gen: G, app: &mut App) -> Result<()> {
   Ok(())
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
   pretty_env_logger::init_timed();
   let opts: Opts = Opts::parse();
   //  println!("{:#?}", opts);
@@ -135,28 +137,37 @@ fn main() -> Result<()> {
   //   3 | _ => println!("Don't be crazy"),
   // }
 
-  let mut settings = Settings::load().context("Can't load the default configuration")?;
-  if let Some(mongo_url) = &opts.mongo_url {
+  let settings = Settings::load().context("Can't load the default configuration")?;
+  let settings = if let Some(mongo_url) = &opts.mongo_url {
     settings
-      .set("database.url", mongo_url.clone())
-      .context("Can't set the database url.")?;
-  }
-  if let Some(mongo_database) = &opts.mongo_database {
+      .set_override("database.url", mongo_url.clone())
+      .context("Can't set the database url.")?
+  } else {
     settings
-      .set("database.database", mongo_database.clone())
-      .context("Can't set the database.")?;
-  }
-  if let Some(amqp_url) = &opts.amqp_url {
+  };
+  let settings = if let Some(mongo_database) = &opts.mongo_database {
     settings
-      .set("rabbitmq.url", amqp_url.clone())
-      .context("Can't set the AMQP URL.")?;
-  }
-  let settings: Settings = settings.try_into().context("Can't load configuration")?;
+      .set_override("database.database", mongo_database.clone())
+      .context("Can't set the database.")?
+  } else {
+    settings
+  };
+  let settings = if let Some(amqp_url) = &opts.amqp_url {
+    settings
+      .set_override("rabbitmq.url", amqp_url.clone())
+      .context("Can't set the AMQP URL.")?
+  } else {
+    settings
+  };
+  let settings = settings.build()?;
+  let settings: Settings = settings
+    .try_deserialize()
+    .context("Can't load configuration")?;
 
   // You can handle information about subcommands by requesting their matches by name
   // (as below), requesting just the name used, or both at the same time
   match &opts.subcmd {
-    SubCommand::Inject(injection) => inject(injection, &opts, &settings),
+    SubCommand::Inject(injection) => inject(injection, &opts, &settings).await,
     SubCommand::Completions(completions) => {
       let mut app = Opts::into_app();
       eprintln!("Generating completion file for {:?}...", completions.choice);
@@ -168,9 +179,9 @@ fn main() -> Result<()> {
         GeneratorChoice::Zsh => print_completions(Zsh, &mut app),
       }
     }
-    SubCommand::Choregraphy(options) => choregraphy_options(options, &opts, &settings),
-    SubCommand::Process(options) => process_options(options, &opts, &settings),
-    SubCommand::Fs(options) => fs(options, &opts, &settings),
+    SubCommand::Choregraphy(options) => choregraphy_options(options, &opts, &settings).await,
+    SubCommand::Process(options) => process_options(options, &opts, &settings).await,
+    SubCommand::Fs(options) => fs(options, &opts, &settings).await,
   }
   // more program logic goes here...
 }

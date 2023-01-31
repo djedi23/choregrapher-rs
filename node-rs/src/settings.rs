@@ -13,7 +13,7 @@
 //! ```
 
 use anyhow::Result;
-use config::{Config, ConfigError, Environment, File};
+use config::{builder::DefaultState, Config, ConfigBuilder, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
 use std::env;
 
@@ -88,25 +88,22 @@ impl Default for Settings {
 }
 
 impl Settings {
-  pub fn load() -> Result<Config, ConfigError> {
-    let mut s = Config::try_from(&Settings::default())?;
-    s.merge(File::with_name("~/.config/dancer/config/default").required(false))?;
-    // Start off by merging in the "default" configuration file
-    s.merge(File::with_name("config/default").required(false))?;
-
-    // Add in the current environment file
-    // Default to 'development' env
-    // Note that this file is _optional_
+  pub fn load() -> Result<ConfigBuilder<DefaultState>, ConfigError> {
     let env = env::var("RUN_MODE").unwrap_or_else(|_| "development".into());
-    s.merge(File::with_name(&format!("config/{}", env)).required(false))?;
-
-    // Add in a local configuration file
-    // This file shouldn't be checked in to git
-    s.merge(File::with_name("config/local").required(false))?;
-
-    // Add in settings from the environment (with a prefix of APP)
-    // Eg.. `NODE_DEBUG=1 ./target/app` would set the `debug` key
-    s.merge(Environment::with_prefix("NODE").separator("__"))?;
+    let s = Config::builder()
+      .add_source(File::with_name("~/.config/dancer/config/default").required(false))
+      // Start off by merging in the "default" configuration file
+      .add_source(File::with_name("config/default").required(false))
+      // Add in the current environment file
+      // Default to 'development' env
+      // Note that this file is _optional_
+      .add_source(File::with_name(&format!("config/{env}")).required(false))
+      // Add in a local configuration file
+      // This file shouldn't be checked in to git
+      .add_source(File::with_name("config/local").required(false))
+      // Add in settings from the environment (with a prefix of APP)
+      // Eg.. `NODE_DEBUG=1 ./target/app` would set the `debug` key
+      .add_source(Environment::with_prefix("NODE").separator("__"));
 
     // You may also programmatically change settings
     //        s.set("database.url", "postgres://")?;
@@ -114,16 +111,10 @@ impl Settings {
     // Now that we're done, let's access our configuration
     // println!("debug: {:?}", s.get_bool("debug"));
     // println!("database: {:?}", s.get::<String>("database.url"));
-
     Ok(s)
   }
   pub fn new() -> Result<Self, ConfigError> {
-    match Settings::load() {
-      Err(e) => Err(e),
-      Ok(s) => {
-        // You can deserialize (and thus freeze) the entire configuration as
-        s.try_into()
-      }
-    }
+    let s = Settings::load()?.build()?;
+    s.try_deserialize()
   }
 }

@@ -9,10 +9,8 @@ use crate::{
   settings::Settings,
 };
 use bson::doc;
-use futures::Future;
-use futures_executor::LocalSpawner;
-use futures_util::{stream::StreamExt, task::LocalSpawnExt};
 use lapin::{
+  message::DeliveryResult,
   options::{
     BasicAckOptions, BasicConsumeOptions, BasicPublishOptions, BasicQosOptions,
     ExchangeDeclareOptions, QueueBindOptions, QueueDeclareOptions,
@@ -22,9 +20,8 @@ use lapin::{
   BasicProperties, Channel, Connection, ConnectionProperties, Error, ExchangeKind,
 };
 use log::{debug, info, trace};
-
 use serde::{de::DeserializeOwned, Serialize};
-use std::{collections::HashMap, fmt::Debug, rc::Rc};
+use std::{collections::HashMap, fmt::Debug, future::Future, sync::Arc};
 
 lazy_static! {
   static ref SETTINGS: Settings = Settings::new().unwrap();
@@ -58,9 +55,10 @@ pub async fn create_rabbit_mq(exchange_suffix: &str) -> Result<(Channel, Channel
   let exchange_declare_options = ExchangeDeclareOptions {
     durable: true,
     ..Default::default()
-  }; // ExchangeDeclareOptions::default();
-     //  exchange_declare_options.durable = true;
-     // partof: #SPC-rabbitmq.exchange
+  };
+  // ExchangeDeclareOptions::default();
+  //  exchange_declare_options.durable = true;
+  // partof: #SPC-rabbitmq.exchange
   channel
     .exchange_declare(
       &exchange_name,
@@ -85,19 +83,20 @@ pub async fn create_rabbit_mq(exchange_suffix: &str) -> Result<(Channel, Channel
 pub async fn create_consumer<'de, Action, T, R, O, F>(
   channel: &Channel,
   channel_out: &Channel,
-  spawner: &LocalSpawner,
   destination_map: &HashMap<String, Vec<InputRef>>,
   origin_map: &HashMap<String, Vec<Relation>>,
   graph_id: &str,
   node: &Node,
   action: Action,
-  output_processor: Box<impl OutputProcessing<INPUT = R, OUTPUT = O> + ?Sized + 'static>,
+  output_processor: Arc<
+    impl OutputProcessing<INPUT = R, OUTPUT = O> + ?Sized + Sync + Send + 'static,
+  >,
 ) where
-  T: Debug + DeserializeOwned,
-  R: Debug + Serialize + FieldAccessor + Clone,
-  O: Debug + Serialize + FieldAccessor + Clone,
-  F: Future<Output = (Option<R>, Rc<Context>)>,
-  Action: Fn(T, Rc<Context>) -> F + 'static,
+  T: Debug + DeserializeOwned + Send,
+  R: Debug + Serialize + FieldAccessor + Clone + Send + Sync,
+  O: Debug + Serialize + FieldAccessor + Clone + Send + Sync,
+  F: Future<Output = (Option<R>, Arc<Context>)> + Send,
+  Action: Fn(T, Arc<Context>) -> F + 'static + Sync + Send + Clone + Copy,
 {
   let queue_declare_options = QueueDeclareOptions {
     durable: true,
@@ -125,7 +124,7 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
       .unwrap();
   }
 
-  let mut consumer = channel
+  let consumer = channel
     .clone()
     .basic_consume(
       &queue_name,
@@ -136,21 +135,30 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
     .await
     .unwrap();
 
-  //  let channel2 = channel.clone();
-  let channel_out2 = channel_out.clone();
+  // let channel2 = channel.clone();
+  let channel_out = channel_out.clone();
   let node = node.clone();
   let destination_map = destination_map.clone();
   let origin_map = origin_map.clone();
   let graph_id = graph_id.to_owned();
-  spawner
-    .spawn_local(async move {
-      info!("will consume");
 
-      let events_collection = db::get_events_collection(&SETTINGS).await.unwrap();
+  info!("will consume");
+  consumer
+    .set_delegate(move |delivery: DeliveryResult| {
+      let channel_out2 = channel_out.clone();
+      let origin_map = origin_map.clone();
+      let node = node.clone();
+      let queue_name = queue_name.clone();
+      let graph_id = graph_id.to_owned();
+      let destination_map = destination_map.clone();
+      let output_processor = output_processor.clone();
 
-      while let Some(delivery) = consumer.next().await {
+      async move {
+        let events_collection = db::get_events_collection(&SETTINGS).await.unwrap();
+
         // partof: #SPC-processing
-        let (channel, delivery) = delivery.expect("error caught in consumer"); // TODO anyhow
+        let Some((channel, delivery)) = delivery.expect("error caught in consumer")
+	  else { panic!("Empty rabbitmq delivery") }; // FIXME: do better than panic.
         trace!(
           "Consume [ {} ] {:?} {:?}",
           queue_name,
@@ -188,9 +196,9 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
         };
 
         // partof: #SPC-processing.callAction
-        let (result, context): (Option<R>, Rc<Context>) = action(
+        let (result, context): (Option<R>, Arc<Context>) = action(
           serde_json::from_value::<T>(data.parameter).unwrap(),
-          Rc::new(context),
+          Arc::new(context),
         )
         .await;
 

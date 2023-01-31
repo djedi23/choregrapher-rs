@@ -3,15 +3,13 @@
 use crate::{
   context::Context,
   graph::{Graph, InputRef, Node, Relation},
-  output_processor::{OutputProcessing, OutputProcessor},
+  output_processor::{DefaultOutputProcessor, OutputProcessing},
   rabbitmq::{create_consumer, FieldAccessor},
   settings::Settings,
 };
-use futures::Future;
-use futures_executor::LocalSpawner;
 use lapin::Channel;
 use serde::{de::DeserializeOwned, Serialize};
-use std::{collections::HashMap, fmt::Debug, rc::Rc};
+use std::{collections::HashMap, fmt::Debug, future::Future, sync::Arc};
 
 /// Hold the internal information to process a graph
 pub struct GraphInternal<'a> {
@@ -28,19 +26,12 @@ pub struct GraphInternal<'a> {
   channel: &'a Channel,
   /// Copy for internal use
   channel_out: &'a Channel,
-  /// Copy for internal use
-  spawner: &'a LocalSpawner,
 }
 
 impl<'a> GraphInternal<'a> {
   /// Create a new graph internals from a graph description
   /// param graph the graph description to internalize
-  pub fn new(
-    graph: Graph,
-    channel: &'a Channel,
-    channel_out: &'a Channel,
-    spawner: &'a LocalSpawner,
-  ) -> GraphInternal<'a> {
+  pub fn new(graph: Graph, channel: &'a Channel, channel_out: &'a Channel) -> GraphInternal<'a> {
     let id = graph.id;
     let mut nodes = HashMap::new();
     for node in graph.nodes {
@@ -91,7 +82,6 @@ impl<'a> GraphInternal<'a> {
       origin_map,
       channel,
       channel_out,
-      spawner,
     }
   }
 
@@ -100,29 +90,37 @@ impl<'a> GraphInternal<'a> {
     self.nodes.get(id)
   }
 
-  pub async fn register_node_action<T, R: 'static, O: 'static, Action, F>(
+  pub async fn register_node_action<
+    T,
+    R: 'static + Send + Sync,
+    O: 'static + Sync + Send,
+    Action,
+    F,
+  >(
     &self,
     node_id: &str,
     action: Action,
-    output_processor: Option<Box<impl OutputProcessing<INPUT = R, OUTPUT = O> + 'static>>,
+    output_processor: Option<
+      Arc<impl OutputProcessing<INPUT = R, OUTPUT = O> + 'static + Send + Sync>,
+    >,
   ) where
-    T: Debug + DeserializeOwned,
+    T: Debug + DeserializeOwned + Send,
     R: Debug + Serialize + FieldAccessor + Clone,
     O: Debug + Serialize + FieldAccessor + Clone + From<R>,
-    F: Future<Output = (Option<R>, Rc<Context>)>,
-    Action: Fn(T, Rc<Context>) -> F + 'static,
+    F: Future<Output = (Option<R>, Arc<Context>)> + Send,
+    Action: Fn(T, Arc<Context>) -> F + 'static + Sync + Send + Clone + Copy,
   {
     let node = self.node(node_id);
     if let Some(node) = node {
-      let op: Box<dyn OutputProcessing<INPUT = R, OUTPUT = O> + 'static> = match output_processor {
-        Some(output_processor) => output_processor,
-        None => Box::<OutputProcessor<R, O>>::default(),
-      };
+      let op: Arc<dyn OutputProcessing<INPUT = R, OUTPUT = O> + 'static + Sync + Send> =
+        match output_processor {
+          Some(output_processor) => output_processor,
+          None => Arc::new(DefaultOutputProcessor::default()),
+        };
 
       create_consumer(
         self.channel,
         self.channel_out,
-        self.spawner,
         &self.destination_map,
         &self.origin_map,
         &self.id,

@@ -1,7 +1,6 @@
 use crate::{InjectOptions, Opts};
 use anyhow::{bail, Context, Error, Result};
 use bson::doc;
-use futures_executor::LocalPool;
 use indicatif::ProgressBar;
 use mongodb::options::FindOneOptions;
 use node_rs::{
@@ -34,43 +33,39 @@ impl FieldAccessor for ValueWraper {
   }
 }
 
-pub fn inject(inject_opts: &InjectOptions, _opt: &Opts, settings: &Settings) -> Result<()> {
-  let mut executor = LocalPool::new();
-  let spawner = executor.spawner();
-  executor.run_until(async {
+pub async fn inject(inject_opts: &InjectOptions, _opt: &Opts, settings: &Settings) -> Result<()> {
+  let spin = ProgressBar::new_spinner();
+  spin.enable_steady_tick(150);
+  spin.set_message("Fetching chroregraphy");
+  let collection = get_graph_collection(settings)
+    .await
+    .context("Accessing mongo")?;
+
+  let document = collection
+    .find_one(doc! {"id":&inject_opts.graph}, FindOneOptions::default())
+    .await
+    .context("Can't fetch the choregraphy.")?;
+  spin.finish_and_clear();
+
+  if let Some(document) = document {
     let spin = ProgressBar::new_spinner();
     spin.enable_steady_tick(150);
-    spin.set_message("Fetching chroregraphy");
-    let collection = get_graph_collection(settings)
-      .await
-      .context("Accessing mongo")?;
-
-    let document = collection
-      .find_one(doc! {"id":&inject_opts.graph}, FindOneOptions::default())
-      .await
-      .context("Can't fetch the choregraphy.")?;
+    spin.set_message("Injecting data");
+    let chor: Graph = bson::from_document(document).context("Can't decode the choregraphy")?;
+    let (channel, channel_out) = create_rabbit_mq(&inject_opts.graph).await?;
+    let gi: GraphInternal = GraphInternal::new(chor, &channel, &channel_out);
+    let process_id = start_process(
+      &channel_out,
+      gi,
+      &serde_json::from_str::<ValueWraper>(&inject_opts.data)
+        .context("Can't decode the data to inject")?,
+      &None,
+    )
+    .await;
     spin.finish_and_clear();
-
-    if let Some(document) = document {
-      let spin = ProgressBar::new_spinner();
-      spin.enable_steady_tick(150);
-      spin.set_message("Injecting data");
-      let chor: Graph = bson::from_document(document).context("Can't decode the choregraphy")?;
-      let (channel, channel_out) = create_rabbit_mq(&inject_opts.graph).await?;
-      let gi: GraphInternal = GraphInternal::new(chor, &channel, &channel_out, &spawner);
-      let process_id = start_process(
-        &channel_out,
-        gi,
-        &serde_json::from_str::<ValueWraper>(&inject_opts.data)
-          .context("Can't decode the data to inject")?,
-        &None,
-      )
-      .await;
-      spin.finish_and_clear();
-      println!("{}", process_id);
-    } else {
-      bail!("Choregraphy not found: {}", &inject_opts.graph);
-    }
-    Ok::<(), Error>(())
-  })
+    println!("{}", process_id);
+  } else {
+    bail!("Choregraphy not found: {}", &inject_opts.graph);
+  }
+  Ok::<(), Error>(())
 }

@@ -30,8 +30,8 @@ fn output_destination(
 
 // partof: #SPC-processing.routingOutput
 /// Route an output to none, one or more inputs.
-pub fn routing<'a, R: Debug + Clone + FieldAccessor + Serialize>(
-  destination_map: &'a HashMap<String, Vec<InputRef>>,
+pub fn routing<R: Debug + Clone + FieldAccessor + Serialize>(
+  destination_map: &HashMap<String, Vec<InputRef>>,
   node: &Node,
   result: &R,
 ) -> Vec<Route> {
@@ -109,9 +109,9 @@ mod tests {
     let result = output_destination(&destination_map, output_ref);
 
     match result {
-      Some(_) => assert!(false, "Shouldn't have found something"),
-      None => assert!(true, "Should return result"),
-    }
+      Some(_) => unreachable!("Shouldn't have found something"),
+      None => "Should return result", // assert!(true, "Should return result"),
+    };
   }
 
   // #SPC-processing.tst-retrieve_output_destination1
@@ -141,7 +141,7 @@ mod tests {
         assert_eq!(result_.len(), 1);
         assert_eq!(result_[0], expected);
       }
-      None => assert!(false, "Should return result"),
+      None => unreachable!("Should return result"),
     }
   }
 
@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(result_[0], expected);
         assert_eq!(result_[1], expected2);
       }
-      None => assert!(false, "Should return result"),
+      None => unreachable!("Should return result"),
     }
   }
 
@@ -211,7 +211,7 @@ mod tests {
       #[serde(rename = "n")]
       N(T, T),
       #[serde(rename = "fact")]
-      FACT(T),
+      Fact(T),
     }
 
     #[derive(Serialize, Deserialize, Debug, Clone, FieldAccessor)]
@@ -260,7 +260,7 @@ mod tests {
       #[serde(rename = "n")]
       N(T, T),
       #[serde(rename = "fact")]
-      FACT(T),
+      Fact(T),
     }
 
     #[derive(Serialize, Deserialize, Debug, Clone, FieldAccessor)]
@@ -312,7 +312,7 @@ mod tests {
       #[serde(rename = "n")]
       N(T, T),
       #[serde(rename = "fact")]
-      FACT(T),
+      Fact(T),
     }
 
     #[derive(Serialize, Deserialize, Debug, Clone, FieldAccessor)]

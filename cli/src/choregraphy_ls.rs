@@ -1,9 +1,11 @@
 use crate::{choregraphy::Choregraphy, Opts};
 use anyhow::{Context, Error, Result};
-use bson::doc;
 use chrono::SecondsFormat;
 use indicatif::ProgressBar;
-use mongodb::options::FindOptions;
+use mongodb::{
+  bson::{doc, from_document},
+  options::FindOptions,
+};
 use node_rs::{db::get_graph_collection, settings::Settings};
 use std::fmt;
 use tokio_stream::StreamExt;
@@ -15,7 +17,10 @@ impl fmt::Display for Choregraphy {
       "{:<16} {:<8} {:<26}",
       self.id,
       self.version,
-      self.created_at.to_rfc3339_opts(SecondsFormat::Millis, true)
+      self
+        .created_at
+        .to_chrono()
+        .to_rfc3339_opts(SecondsFormat::Millis, true)
     )
   }
 }
@@ -38,8 +43,7 @@ pub async fn ls(_opt: &Opts, settings: &Settings) -> Result<()> {
   while let Some(result) = cursor.next().await {
     match result {
       Ok(document) => {
-        let chor: Choregraphy =
-          bson::from_document(document).context("Can't decode the choregraphies")?;
+        let chor: Choregraphy = from_document(document).context("Can't decode the choregraphies")?;
         println!("{}", chor);
       }
       Err(e) => return Err(e.into()),

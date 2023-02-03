@@ -15,11 +15,11 @@ indicatif = "0.15.0"
 log = "^0.4"
 pretty_env_logger = "^0.4"
 
-mongodb = { version="=1.1.1" , features = ["async-std-runtime"], default-features = false} # git= "https://github.com/mongodb/mongo-rust-driver"
-bson = {version= "1.1.0", features = ['u2i'] }
+mongodb = { version="=2.3" , features = ["bson-chrono-0_4"]} # git= "https://github.com/mongodb/mongo-rust-driver"
+#bson = {version= "1.1.0", features = ['u2i'] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = {version="^0.4", features = ["serde"]}
-mongodb-gridfs = {version="0.1.2", features = ["async-std-runtime"], default-features = false }
-tokio = { version = "1.24.0", features = ["full"] } # dev
-tokio-stream = "0.1.11"
+mongodb-gridfs = {version="0.2", features = ["tokio-runtime"] }
+tokio = { version = "1", features = ["full"] } # dev -> full
+tokio-stream = "0.1"

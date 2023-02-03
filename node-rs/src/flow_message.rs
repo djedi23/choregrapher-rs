@@ -1,5 +1,5 @@
 use crate::{context::FlowContext, graph::OutputRef};
-use bson::DateTime;
+use mongodb::bson::DateTime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

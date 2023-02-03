@@ -8,7 +8,6 @@ use crate::{
   process_output::process_output,
   settings::Settings,
 };
-use bson::doc;
 use lapin::{
   message::DeliveryResult,
   options::{
@@ -20,6 +19,7 @@ use lapin::{
   BasicProperties, Channel, Connection, ConnectionProperties, Error, ExchangeKind,
 };
 use log::{debug, info, trace};
+use mongodb::bson::doc;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{collections::HashMap, fmt::Debug, future::Future, sync::Arc};
 
@@ -141,6 +141,7 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
   let destination_map = destination_map.clone();
   let origin_map = origin_map.clone();
   let graph_id = graph_id.to_owned();
+  let handle = tokio::runtime::Handle::current();
 
   info!("will consume");
   consumer
@@ -152,72 +153,76 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
       let graph_id = graph_id.to_owned();
       let destination_map = destination_map.clone();
       let output_processor = output_processor.clone();
+      let handle = handle.clone();
 
       async move {
-        let events_collection = db::get_events_collection(&SETTINGS).await.unwrap();
+        handle.spawn(async move {
+          let events_collection = db::get_events_collection(&SETTINGS).await.unwrap();
 
-        // partof: #SPC-processing
-        let Some((channel, delivery)) = delivery.expect("error caught in consumer")
+          //      while let Some(delivery) = consumer.next().await {
+          // partof: #SPC-processing
+          let Some((channel, delivery)) = delivery.expect("error caught in consumer")
 	  else { panic!("Empty rabbitmq delivery") }; // FIXME: do better than panic.
-        trace!(
-          "Consume [ {} ] {:?} {:?}",
-          queue_name,
-          delivery,
-          String::from_utf8(delivery.data.clone())
-        );
+          trace!(
+            "Consume [ {} ] {:?} {:?}",
+            queue_name,
+            delivery,
+            String::from_utf8(delivery.data.clone())
+          );
 
-        let mut relation = None;
-        for relationf in origin_map.get(&delivery.routing_key.to_string()).unwrap() {
-          if relationf.to.node == node.id {
-            relation = Some(relationf);
-            break;
+          let mut relation = None;
+          for relationf in origin_map.get(&delivery.routing_key.to_string()).unwrap() {
+            if relationf.to.node == node.id {
+              relation = Some(relationf);
+              break;
+            }
           }
-        }
-        let relation: Relation = relation.unwrap().clone();
+          let relation: Relation = relation.unwrap().clone();
 
-        let mut data: PartialFlowMessage = serde_json::from_slice(&delivery.data).unwrap();
-        debug!("Data {:?}", data);
+          let mut data: PartialFlowMessage = serde_json::from_slice(&delivery.data).unwrap();
+          debug!("Data {:?}", data);
 
-        // partof: #SPC-processing.missingInput
-        fetch_parameter(
-          &data.process_id,
-          &node,
-          &mut data.parameter,
-          &origin_map,
-          &events_collection,
-        )
-        .await;
+          // partof: #SPC-processing.missingInput
+          fetch_parameter(
+            &data.process_id,
+            &node,
+            &mut data.parameter,
+            &origin_map,
+            &events_collection,
+          )
+          .await;
 
-        // partof: #SPC-processing.actionContext
-        let context = Context {
-          process_id: data.process_id.clone(),
-          relation,
-          context: data.context.clone().unwrap_or_default(),
-        };
+          // partof: #SPC-processing.actionContext
+          let context = Context {
+            process_id: data.process_id.clone(),
+            relation,
+            context: data.context.clone().unwrap_or_default(),
+          };
 
-        // partof: #SPC-processing.callAction
-        let (result, context): (Option<R>, Arc<Context>) = action(
-          serde_json::from_value::<T>(data.parameter).unwrap(),
-          Arc::new(context),
-        )
-        .await;
+          // partof: #SPC-processing.callAction
+          let (result, context): (Option<R>, Arc<Context>) = action(
+            serde_json::from_value::<T>(data.parameter).unwrap(),
+            Arc::new(context),
+          )
+          .await;
 
-        process_output(
-          result,
-          context,
-          &graph_id,
-          &data.process_id,
-          &node,
-          &destination_map,
-          &channel_out2,
-          &output_processor,
-          &events_collection,
-        )
-        .await;
-        channel
-          .basic_ack(delivery.delivery_tag, BasicAckOptions::default())
-          .await
-          .expect("ack");
+          process_output(
+            result,
+            context,
+            &graph_id,
+            &data.process_id,
+            &node,
+            &destination_map,
+            &channel_out2,
+            &output_processor,
+            &events_collection,
+          )
+          .await;
+          channel
+            .basic_ack(delivery.delivery_tag, BasicAckOptions::default())
+            .await
+            .expect("ack");
+        });
       }
     })
     .unwrap();

@@ -1,10 +1,12 @@
 use crate::Opts;
 use anyhow::{Context, Result};
-use bson::{doc, Bson};
 use clap::Parser;
 use core::fmt;
 use indicatif::ProgressBar;
-use mongodb::options::FindOptions;
+use mongodb::{
+  bson::{doc, from_document, Bson},
+  options::FindOptions,
+};
 use node_rs::{db::get_collection, flow_message::NodeOutput, settings::Settings};
 use std::fmt::Display;
 use tokio_stream::StreamExt;
@@ -86,6 +88,7 @@ impl Display for ProcessOutputVerboseDisplay {
       out.process_id,
       out
         .timestamp
+        .to_chrono()
         .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
       out.output.node,
       out.output.output,
@@ -155,9 +158,8 @@ pub(crate) async fn process_output(
           println!("{}", j);
         } else {
           for output_elt in output_doc {
-            let output: NodeOutput<Bson> =
-              bson::from_document(output_elt.as_document().unwrap().clone())
-                .context("Can't decode the process output")?;
+            let output: NodeOutput<Bson> = from_document(output_elt.as_document().unwrap().clone())
+              .context("Can't decode the process output")?;
 
             if out_opts.verbose {
               println!("{}", ProcessOutputVerboseDisplay::from(output));

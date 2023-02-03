@@ -9,11 +9,10 @@ use crate::{
   routing::routing,
   settings::Settings,
 };
-use bson::{doc, to_bson, Bson};
 use chrono::Utc;
 use lapin::Channel;
 use log::trace;
-use mongodb::{options::UpdateModifications, Collection};
+use mongodb::{bson::{doc, to_bson, Bson, Document},options::UpdateModifications, Collection};
 use serde::Serialize;
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 use yansi::Paint;
@@ -32,7 +31,7 @@ pub async fn process_output<'a, R, O>(
   destination_map: &'a HashMap<String, Vec<InputRef>>,
   channel: &Channel,
   output_processor: &Arc<impl OutputProcessing<INPUT = R, OUTPUT = O> + ?Sized + 'static>,
-  events_collection: &Collection,
+  events_collection: &Collection<Document>,
 ) where
   R: Debug + Serialize + FieldAccessor + Clone,
   O: Debug + Serialize + FieldAccessor + Clone,

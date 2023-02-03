@@ -1,8 +1,10 @@
 use crate::{InjectOptions, Opts};
 use anyhow::{bail, Context, Error, Result};
-use bson::doc;
 use indicatif::ProgressBar;
-use mongodb::options::FindOneOptions;
+use mongodb::{
+  bson::{doc, from_document},
+  options::FindOneOptions,
+};
 use node_rs::{
   builder::GraphInternal,
   db::get_graph_collection,
@@ -51,7 +53,7 @@ pub async fn inject(inject_opts: &InjectOptions, _opt: &Opts, settings: &Setting
     let spin = ProgressBar::new_spinner();
     spin.enable_steady_tick(150);
     spin.set_message("Injecting data");
-    let chor: Graph = bson::from_document(document).context("Can't decode the choregraphy")?;
+    let chor: Graph = from_document(document).context("Can't decode the choregraphy")?;
     let (channel, channel_out) = create_rabbit_mq(&inject_opts.graph).await?;
     let gi: GraphInternal = GraphInternal::new(chor, &channel, &channel_out);
     let process_id = start_process(

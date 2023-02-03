@@ -1,14 +1,12 @@
-use bson::doc;
-use log::debug;
-use mongodb::{options::FindOneOptions, Collection};
-use serde_json::Value;
-use yansi::Paint;
-
 use crate::{
   graph::{Node, Relation},
   settings::Settings,
 };
+use log::debug;
+use mongodb::{bson::{doc, Document},options::FindOneOptions, Collection};
+use serde_json::Value;
 use std::collections::HashMap;
+use yansi::Paint;
 lazy_static! {
   static ref SETTINGS: Settings = Settings::new().unwrap();
 }
@@ -18,7 +16,7 @@ pub async fn fetch_parameter(
   node: &Node,
   parameter: &mut Value,
   origin_map: &HashMap<String, Vec<Relation>>,
-  events_collection: &Collection,
+  events_collection: &Collection<Document>,
 ) {
   for i in &node.input {
     if !&parameter[i].is_null() {

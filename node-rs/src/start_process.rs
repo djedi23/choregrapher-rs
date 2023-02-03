@@ -8,11 +8,13 @@ use crate::{
   routing::routing,
   settings::Settings,
 };
-use bson::{doc, to_bson, Bson};
 use chrono::Utc;
 use lapin::Channel;
 use log::trace;
-use mongodb::options::{UpdateModifications, UpdateOptions};
+use mongodb::{
+  bson::{doc, to_bson, Bson},
+  options::{UpdateModifications, UpdateOptions},
+};
 use serde::Serialize;
 use std::fmt::Debug;
 use uuid::Uuid;

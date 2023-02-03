@@ -1,9 +1,9 @@
 use crate::Opts;
 use anyhow::{Context, Error, Result};
-use bson::{doc, oid::ObjectId, DateTime};
 use chrono::SecondsFormat;
 use clap::{Parser, ValueHint};
 use indicatif::{ProgressBar, ProgressStyle};
+use mongodb::bson::{doc, from_document, oid::ObjectId, DateTime};
 use mongodb_gridfs::{
   options::{GridFSBucketOptions, GridFSFindOptions, GridFSUploadOptions, ProgressUpdate},
   GridFSBucket,
@@ -14,6 +14,7 @@ use std::{
   fmt,
   fs::File,
   io::{stdout, Write},
+  sync::Arc,
 };
 use tokio_stream::StreamExt;
 
@@ -107,6 +108,7 @@ impl fmt::Display for GridFile {
       self.length,
       self
         .upload_date
+        .to_chrono()
         .to_rfc3339_opts(SecondsFormat::Millis, true),
       self.filename,
     )
@@ -155,7 +157,7 @@ async fn ls(opts: &LsOptions, settings: &Settings) -> Result<()> {
   while let Some(result) = cursor.next().await {
     match result {
       Ok(document) => {
-        let file: GridFile = bson::from_document(document).context("Can't decode the files")?;
+        let file: GridFile = from_document(document).context("Can't decode the files")?;
         if opts.long {
           println!("{}", file);
         } else {
@@ -192,7 +194,9 @@ async fn put(opts: &PutOptions, settings: &Settings) -> Result<()> {
         .progress_chars("=> "),
     );
     spin.set_message(&filename);
-    let file = File::open(&filename).context(format!("Opening file \"{}\"", &filename))?;
+    let file = tokio::fs::File::open(&filename)
+      .await
+      .context(format!("Opening file \"{}\"", &filename))?;
     let id = bucket
       .clone()
       .upload_from_stream(
@@ -200,9 +204,9 @@ async fn put(opts: &PutOptions, settings: &Settings) -> Result<()> {
         file,
         Some(
           GridFSUploadOptions::builder()
-            .progress_tick(Some(&Progression {
+            .progress_tick(Some(Arc::new(Progression {
               progress: spin.clone(),
-            }))
+            })))
             .build(),
         ),
       )
@@ -234,7 +238,7 @@ async fn get(opts: &GetOptions, settings: &Settings) -> Result<()> {
   for id in opts.ids.clone() {
     let file_document = bucket
       .find(
-        doc! {"_id":ObjectId::with_string(&id).context("Incorrect object id format")?},
+        doc! {"_id":ObjectId::parse_str(&id).context("Incorrect object id format")?},
         GridFSFindOptions::default(),
       )
       .await?
@@ -269,7 +273,7 @@ async fn get(opts: &GetOptions, settings: &Settings) -> Result<()> {
 
       let mut file = File::create(filename).context(format!("Opening file \"{}\"", &filename))?;
       let mut cursor = bucket
-        .open_download_stream(ObjectId::with_string(&id).context("Incorrect object id format")?)
+        .open_download_stream(ObjectId::parse_str(&id).context("Incorrect object id format")?)
         .await?;
       let mut position: u64 = 0;
       while let Some(doc) = cursor.next().await {

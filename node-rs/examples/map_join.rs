@@ -1,7 +1,9 @@
-use bson::{doc, Bson, Document};
 use field_accessor_derive::FieldAccessor;
 use log::{debug, info, trace};
-use mongodb::options::{FindOneAndUpdateOptions, FindOneOptions};
+use mongodb::{
+  bson::{doc, from_bson, Bson, Document},
+  options::{FindOneAndUpdateOptions, FindOneOptions},
+};
 use node_rs::{
   builder::GraphInternal,
   context::{Context, FlowContext},
@@ -248,7 +250,7 @@ async fn main() -> MainResult<()> {
         .unwrap()
         .iter()
         .filter(|&o| {
-          let node_output: PartialNodeOutput = bson::from_bson(o.clone()).unwrap();
+          let node_output: PartialNodeOutput = from_bson(o.clone()).unwrap();
           // TS:     if (o.output.node !== from.node || o.output.output !== from.output) return false;
           if node_output.output.node != context.relation.from.node
             || node_output.output.output != context.relation.from.output

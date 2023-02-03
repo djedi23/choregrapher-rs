@@ -1,10 +1,12 @@
 use crate::{choregraphy::ChoregraphyProcessOptions, Opts};
 use anyhow::{Context, Error, Result};
-use bson::{doc, DateTime};
 use chrono::SecondsFormat;
 use core::fmt;
 use indicatif::ProgressBar;
-use mongodb::options::FindOptions;
+use mongodb::{
+  bson::{doc, from_document, DateTime},
+  options::FindOptions,
+};
 use node_rs::{db::get_collection, settings::Settings};
 use serde::Deserialize;
 use tokio_stream::StreamExt;
@@ -22,7 +24,10 @@ impl fmt::Display for Process {
       f,
       "{:<36} {:<26}",
       self.process_id,
-      self.timestamp.to_rfc3339_opts(SecondsFormat::Millis, true)
+      self
+        .timestamp
+        .to_chrono()
+        .to_rfc3339_opts(SecondsFormat::Millis, true)
     )
   }
 }
@@ -55,7 +60,7 @@ pub(crate) async fn process(
   while let Some(result) = cursor.next().await {
     match result {
       Ok(document) => {
-        let process: Process = bson::from_document(document).context("Can't decode the process")?;
+        let process: Process = from_document(document).context("Can't decode the process")?;
         if _opt.verbose > 0 || process_opts.verbose {
           println!("{}", process);
         } else {

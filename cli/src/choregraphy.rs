@@ -1,7 +1,7 @@
 use crate::{choregraphy_inspect::inspect, choregraphy_ls::ls, choregraphy_process::process, Opts};
 use anyhow::Result;
-use bson::{doc, DateTime};
 use clap::Parser;
+use mongodb::bson::{doc, DateTime};
 use node_rs::settings::Settings;
 use serde::Deserialize;
 

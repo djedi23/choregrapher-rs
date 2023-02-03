@@ -12,8 +12,7 @@ anyhow = "1.0"
 lapin = { version = "1.2.1" }
 log = "^0.4"
 pretty_env_logger = "^0.4"
-mongodb = { version="1.1.1" , features = ["async-std-runtime"], default-features = false} # git= "https://github.com/mongodb/mongo-rust-driver"
-bson = {version= "1.1.0", features = ['u2i'] }
+mongodb = { version="2.3" , features = ["bson-chrono-0_4"]} # git= "https://github.com/mongodb/mongo-rust-driver"
 config = "0.13"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
@@ -22,4 +21,4 @@ lazy_static = "1.4.0"
 uuid = { version = "0.8", features = ["serde", "v4"] }
 yansi = "0.5.0"
 openssl = { version = "0.10", features = ["vendored"] }
-tokio = { version = "1.24.0", features = ["full"] } # dev
+tokio = { version = "1.24", features = ["full"] } # dev

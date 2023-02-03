@@ -3,9 +3,11 @@ use crate::{
   Opts,
 };
 use anyhow::{bail, Context, Error, Result};
-use bson::doc;
 use indicatif::ProgressBar;
-use mongodb::options::FindOneOptions;
+use mongodb::{
+  bson::{doc, from_document},
+  options::FindOneOptions,
+};
 use node_rs::{db::get_graph_collection, settings::Settings};
 use serde_json::{json, to_string_pretty, Value};
 use std::collections::HashMap;
@@ -34,7 +36,7 @@ pub async fn inspect(
       print!("{}", to_string_pretty(&document)?);
     } else {
       let choregraphy: Choregraphy =
-        bson::from_document(document).context("Can't decode the choregraphy")?;
+        from_document(document).context("Can't decode the choregraphy")?;
 
       println!(
         "{}:{}

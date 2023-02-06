@@ -25,12 +25,6 @@ use std::{collections::HashMap, fmt::Debug, future::Future, sync::Arc};
 
 lazy_static! {
   static ref SETTINGS: Settings = Settings::new().unwrap();
-  static ref CONNECTION: Connection = Connection::connect(
-    &std::env::var("AMQP_ADDR").unwrap_or_else(|_| SETTINGS.rabbitmq.url.clone()),
-    ConnectionProperties::default()
-  )
-  .wait()
-  .unwrap();
 }
 
 pub trait FieldAccessor {
@@ -41,13 +35,17 @@ pub trait FieldAccessor {
 }
 
 pub async fn create_rabbit_mq(exchange_suffix: &str) -> Result<(Channel, Channel), Error> {
-  // let rabbitmq_url = std::env::var("AMQP_ADDR").unwrap_or_else(|_| settings.rabbitmq.url.clone());
-  // let conn = Connection::connect(&rabbitmq_url, ConnectionProperties::default()).await?;
+  info!("Rabbitmq init");
+  let rabbitmq_url = std::env::var("AMQP_ADDR").unwrap_or_else(|_| SETTINGS.rabbitmq.url.clone());
+  let options = ConnectionProperties::default()
+    // Use tokio executor and reactor.
+    // At the moment the reactor is only available for unix.
+    .with_executor(tokio_executor_trait::Tokio::current())
+    .with_reactor(tokio_reactor_trait::Tokio);
+  let connection = Connection::connect(&rabbitmq_url, options).await?;
 
-  info!("CONNECTED");
-
-  let channel = CONNECTION.create_channel().await?;
-  let channel_out = CONNECTION.create_channel().await?;
+  let channel = connection.create_channel().await?;
+  let channel_out = connection.create_channel().await?;
   let exchange_name = (SETTINGS.rabbitmq.exchange_name.to_owned()) + "_" + exchange_suffix;
 
   debug!("rabbitmq.exchange_name = {}", &exchange_name);
@@ -144,88 +142,93 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
   let handle = tokio::runtime::Handle::current();
 
   info!("will consume");
-  consumer
-    .set_delegate(move |delivery: DeliveryResult| {
-      let channel_out2 = channel_out.clone();
-      let origin_map = origin_map.clone();
-      let node = node.clone();
-      let queue_name = queue_name.clone();
-      let graph_id = graph_id.to_owned();
-      let destination_map = destination_map.clone();
-      let output_processor = output_processor.clone();
-      let handle = handle.clone();
+  consumer.set_delegate(move |delivery: DeliveryResult| {
+    let channel_out2 = channel_out.clone();
+    let origin_map = origin_map.clone();
+    let node = node.clone();
+    let queue_name = queue_name.clone();
+    let graph_id = graph_id.to_owned();
+    let destination_map = destination_map.clone();
+    let output_processor = output_processor.clone();
+    let handle = handle.clone();
 
-      async move {
-        handle.spawn(async move {
-          let events_collection = db::get_events_collection(&SETTINGS).await.unwrap();
+    async move {
+      handle.spawn(async move {
+        let events_collection = db::get_events_collection(&SETTINGS).await.unwrap();
 
-          //      while let Some(delivery) = consumer.next().await {
-          // partof: #SPC-processing
-          let Some((channel, delivery)) = delivery.expect("error caught in consumer")
-	  else { panic!("Empty rabbitmq delivery") }; // FIXME: do better than panic.
-          trace!(
-            "Consume [ {} ] {:?} {:?}",
-            queue_name,
-            delivery,
-            String::from_utf8(delivery.data.clone())
-          );
-
-          let mut relation = None;
-          for relationf in origin_map.get(&delivery.routing_key.to_string()).unwrap() {
-            if relationf.to.node == node.id {
-              relation = Some(relationf);
-              break;
-            }
+        //      while let Some(delivery) = consumer.next().await {
+        // partof: #SPC-processing
+        let delivery = match delivery {
+          // Carries the delivery alongside its channel
+          Ok(Some(delivery)) => delivery,
+          // The consumer got canceled
+          Ok(None) => return,
+          // Carries the error and is always followed by Ok(None)
+          Err(error) => {
+            dbg!("Failed to consume queue message {}", error);
+            return;
           }
-          let relation: Relation = relation.unwrap().clone();
+        }; //           let Some( delivery) = delivery.expect("error caught in consumer")
+           // else { panic!("Empty rabbitmq delivery") }; // FIXME: do better than panic.
+        trace!(
+          "Consume [ {} ] {:?} {:?}",
+          queue_name,
+          delivery,
+          String::from_utf8(delivery.data.clone())
+        );
 
-          let mut data: PartialFlowMessage = serde_json::from_slice(&delivery.data).unwrap();
-          debug!("Data {:?}", data);
+        let mut relation = None;
+        for relationf in origin_map.get(&delivery.routing_key.to_string()).unwrap() {
+          if relationf.to.node == node.id {
+            relation = Some(relationf);
+            break;
+          }
+        }
+        let relation: Relation = relation.unwrap().clone();
 
-          // partof: #SPC-processing.missingInput
-          fetch_parameter(
-            &data.process_id,
-            &node,
-            &mut data.parameter,
-            &origin_map,
-            &events_collection,
-          )
-          .await;
+        let mut data: PartialFlowMessage = serde_json::from_slice(&delivery.data).unwrap();
+        debug!("Data {:?}", data);
 
-          // partof: #SPC-processing.actionContext
-          let context = Context {
-            process_id: data.process_id.clone(),
-            relation,
-            context: data.context.clone().unwrap_or_default(),
-          };
+        // partof: #SPC-processing.missingInput
+        fetch_parameter(
+          &data.process_id,
+          &node,
+          &mut data.parameter,
+          &origin_map,
+          &events_collection,
+        )
+        .await;
 
-          // partof: #SPC-processing.callAction
-          let (result, context): (Option<R>, Arc<Context>) = action(
-            serde_json::from_value::<T>(data.parameter).unwrap(),
-            Arc::new(context),
-          )
-          .await;
+        // partof: #SPC-processing.actionContext
+        let context = Context {
+          process_id: data.process_id.clone(),
+          relation,
+          context: data.context.clone().unwrap_or_default(),
+        };
 
-          process_output(
-            result,
-            context,
-            &graph_id,
-            &data.process_id,
-            &node,
-            &destination_map,
-            &channel_out2,
-            &output_processor,
-            &events_collection,
-          )
-          .await;
-          channel
-            .basic_ack(delivery.delivery_tag, BasicAckOptions::default())
-            .await
-            .expect("ack");
-        });
-      }
-    })
-    .unwrap();
+        // partof: #SPC-processing.callAction
+        let (result, context): (Option<R>, Arc<Context>) = action(
+          serde_json::from_value::<T>(data.parameter).unwrap(),
+          Arc::new(context),
+        )
+        .await;
+
+        process_output(
+          result,
+          context,
+          &graph_id,
+          &data.process_id,
+          &node,
+          &destination_map,
+          &channel_out2,
+          &output_processor,
+          &events_collection,
+        )
+        .await;
+        delivery.ack(BasicAckOptions::default()).await.expect("ack");
+      });
+    }
+  });
 }
 
 pub async fn send_message(
@@ -250,7 +253,7 @@ pub async fn send_message(
       &exchange_name,
       topic,
       BasicPublishOptions::default(),
-      payload,
+      &payload,
       publish_properties,
     )
     .await?

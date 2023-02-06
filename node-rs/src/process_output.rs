@@ -12,7 +12,11 @@ use crate::{
 use chrono::Utc;
 use lapin::Channel;
 use log::trace;
-use mongodb::{bson::{doc, to_bson, Bson, Document},options::UpdateModifications, Collection};
+use mongodb::{
+  bson::{doc, to_bson, Bson, Document},
+  options::UpdateModifications,
+  Collection,
+};
 use serde::Serialize;
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 use yansi::Paint;

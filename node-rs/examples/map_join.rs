@@ -301,8 +301,8 @@ async fn main() -> MainResult<()> {
               FindOneAndUpdateOptions::default(),
             )
             .await
-            .unwrap()
-            .unwrap(); // TS:  if (result.value !== null)
+            .unwrap_or_default()
+            .unwrap_or_default(); // TS:  if (result.value !== null)
           let mut im = inputs.as_array().unwrap().clone();
           let map_label_cloned = &map_label.clone();
           im.sort_by_cached_key(|i| -> i64 {

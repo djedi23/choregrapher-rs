@@ -3,7 +3,11 @@ use crate::{
   settings::Settings,
 };
 use log::debug;
-use mongodb::{bson::{doc, Document},options::FindOneOptions, Collection};
+use mongodb::{
+  bson::{doc, Document},
+  options::FindOneOptions,
+  Collection,
+};
 use serde_json::Value;
 use std::collections::HashMap;
 use yansi::Paint;

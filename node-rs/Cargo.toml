@@ -9,7 +9,7 @@ edition = "2018"
 [dependencies]
 field_accessor_derive = {version= "0.1.0", path = "../field_accessor_derive" }
 anyhow = "1.0"
-lapin = { version = "1.2.1" }
+lapin = { version = "2" }
 log = "^0.4"
 pretty_env_logger = "^0.4"
 mongodb = { version="2.3" , features = ["bson-chrono-0_4"]} # git= "https://github.com/mongodb/mongo-rust-driver"
@@ -22,3 +22,5 @@ uuid = { version = "0.8", features = ["serde", "v4"] }
 yansi = "0.5.0"
 openssl = { version = "0.10", features = ["vendored"] }
 tokio = { version = "1.24", features = ["full"] } # dev
+tokio-executor-trait = "2.1"
+tokio-reactor-trait = "1.1"

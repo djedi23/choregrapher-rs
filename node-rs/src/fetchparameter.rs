@@ -2,7 +2,6 @@ use crate::{
   graph::{Node, Relation},
   settings::Settings,
 };
-use log::debug;
 use mongodb::{
   bson::{doc, Document},
   options::FindOneOptions,
@@ -10,11 +9,13 @@ use mongodb::{
 };
 use serde_json::Value;
 use std::collections::HashMap;
+use tracing::{debug, span, Instrument};
 use yansi::Paint;
 lazy_static! {
   static ref SETTINGS: Settings = Settings::new().unwrap();
 }
 
+#[tracing::instrument(level = "debug", skip(events_collection))]
 pub async fn fetch_parameter(
   process_id: &str,
   node: &Node,
@@ -43,6 +44,7 @@ pub async fn fetch_parameter(
 
         let event_document = events_collection
           .find_one(query_filter, FindOneOptions::default())
+          .instrument(span!(tracing::Level::DEBUG, "mongo.find_one"))
           .await
           .unwrap() // OK
           .unwrap(); // Option

@@ -1,5 +1,4 @@
 use field_accessor_derive::FieldAccessor;
-use log::{debug, info};
 use node_rs::{
   builder::GraphInternal,
   context::Context,
@@ -15,6 +14,8 @@ use std::{
   ops::{Mul, Sub},
   sync::Arc,
 };
+use tracing::{debug, info};
+use yansi::Paint;
 
 // curl -X DELETE -u admin:admin 'http://localhost:15672/api/queues/%2F/flow_queue_fact/contents'
 
@@ -41,7 +42,7 @@ enum FactResult<T: Sub + Mul> {
 
 #[tokio::main]
 async fn main() -> MainResult<()> {
-  pretty_env_logger::init_timed();
+  node_rs::tracing::init();
   let settings = Settings::new().unwrap();
   info!("{:?}", settings);
 
@@ -80,14 +81,15 @@ async fn main() -> MainResult<()> {
   let (channel, channel_out) = create_rabbit_mq(&graph.id).await?;
   let gi: GraphInternal = GraphInternal::new(graph.clone(), &channel, &channel_out);
 
+  #[tracing::instrument(level = "debug")]
   async fn fact_action(
     data: FactInput<u64>,
     _context: Arc<Context>,
   ) -> (Option<FactResult<u64>>, Arc<Context>) {
-    debug!("fact action {:?}", data);
+    debug!("fact action {:?}", Paint::blue(&data));
     match data.i {
       Fact::N(1, r) => {
-        info!("Fact: {:?}", r);
+        info!("Fact: {:?}", Paint::green(&r).bold());
         (Some(FactResult::R(r)), _context)
       }
       Fact::N(n, r) => (Some(FactResult::O(Fact::N(n - 1, r * n))), _context),

@@ -3,10 +3,10 @@ use crate::{
   rabbitmq::FieldAccessor,
   settings::Settings,
 };
-use log::trace;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{collections::HashMap, fmt::Debug};
+use tracing::trace;
 use yansi::Paint;
 
 lazy_static! {
@@ -30,6 +30,7 @@ fn output_destination(
 
 // partof: #SPC-processing.routingOutput
 /// Route an output to none, one or more inputs.
+#[tracing::instrument(level = "debug")]
 pub fn routing<R: Debug + Clone + FieldAccessor + Serialize>(
   destination_map: &HashMap<String, Vec<InputRef>>,
   node: &Node,

@@ -1,5 +1,4 @@
 use field_accessor_derive::FieldAccessor;
-use log::{debug, info, trace};
 use mongodb::{
   bson::{doc, from_bson, Bson, Document},
   options::{FindOneAndUpdateOptions, FindOneOptions},
@@ -22,6 +21,7 @@ use std::{
   ops::{Mul, Sub},
   sync::Arc,
 };
+use tracing::{debug, info, span, trace, Instrument};
 use uuid::Uuid;
 use yansi::Paint;
 
@@ -75,9 +75,9 @@ struct MapOutputProcessing;
 
 impl OutputProcessing for MapOutputProcessing {
   type INPUT = VecFact<u64>;
-
   type OUTPUT = FactInput<u64>;
 
+  #[tracing::instrument(level = "debug", skip_all)]
   fn process(&self, out: Self::INPUT, context: Arc<Context>) -> Vec<(Self::OUTPUT, Arc<Context>)> {
     let map_id = &Uuid::new_v4().to_string();
     match context.get_label("maps".into()) {
@@ -122,7 +122,7 @@ impl OutputProcessing for MapOutputProcessing {
 
 #[tokio::main]
 async fn main() -> MainResult<()> {
-  pretty_env_logger::init_timed();
+  node_rs::tracing::init();
   let settings = Settings::new().unwrap();
   info!("{:?}", settings);
 
@@ -195,6 +195,7 @@ async fn main() -> MainResult<()> {
   let (channel, channel_out) = create_rabbit_mq(&graph.id).await?;
   let gi: GraphInternal = GraphInternal::new(graph.clone(), &channel, &channel_out);
 
+  #[tracing::instrument(level = "debug")]
   async fn map_action(
     data: VecFact<u64>,
     context: Arc<Context>,
@@ -206,6 +207,7 @@ async fn main() -> MainResult<()> {
   gi.register_node_action("map", map_action, Some(Arc::new(MapOutputProcessing)))
     .await;
 
+  #[tracing::instrument(level = "debug")]
   async fn fact_action(
     data: FactInput<u64>,
     context: Arc<Context>,
@@ -227,6 +229,7 @@ async fn main() -> MainResult<()> {
   )
   .await;
 
+  #[tracing::instrument(level = "debug")]
   async fn join_function(
     data: JoinInput<u64>,
     context: Arc<Context>,
@@ -239,6 +242,7 @@ async fn main() -> MainResult<()> {
         doc! {"processId":context.process_id.clone()},
         FindOneOptions::default(),
       )
+      .instrument(span!(tracing::Level::DEBUG, "mongo.find_one"))
       .await
       .unwrap() // result
       .unwrap(); // Option
@@ -300,6 +304,7 @@ async fn main() -> MainResult<()> {
               doc! {"$set":  update_query},
               FindOneAndUpdateOptions::default(),
             )
+            .instrument(span!(tracing::Level::DEBUG, "mongo.find_one_and_update"))
             .await
             .unwrap_or_default()
             .unwrap_or_default(); // TS:  if (result.value !== null)

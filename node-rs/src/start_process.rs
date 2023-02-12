@@ -10,18 +10,19 @@ use crate::{
 };
 use chrono::Utc;
 use lapin::Channel;
-use log::trace;
 use mongodb::{
   bson::{doc, to_bson, Bson},
   options::{UpdateModifications, UpdateOptions},
 };
 use serde::Serialize;
 use std::fmt::Debug;
+use tracing::{instrument, span, trace, Instrument};
 use uuid::Uuid;
 
 /// Start a new choragrapher process.
 /// returns the process id.
 ///  partof: #SPC-run.startProcess
+#[instrument(skip(chan, graph))]
 pub async fn start_process<T>(
   chan: &Channel,
   graph: GraphInternal<'_>,
@@ -69,6 +70,7 @@ where
                   }),
           Some(options),
         )
+        .instrument(span!(tracing::Level::DEBUG, "mongo.update_one"))
         .await
         .unwrap();
 
@@ -105,6 +107,7 @@ where
           },
           None,
         )
+        .instrument(span!(tracing::Level::DEBUG, "mongo.insert_one"))
         .await
         .unwrap();
     }

@@ -10,6 +10,7 @@ use crate::{
 use lapin::Channel;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{collections::HashMap, fmt::Debug, future::Future, sync::Arc};
+use tracing::instrument;
 
 /// Hold the internal information to process a graph
 pub struct GraphInternal<'a> {
@@ -90,6 +91,7 @@ impl<'a> GraphInternal<'a> {
     self.nodes.get(id)
   }
 
+  #[instrument(level = "trace", skip(self, action, output_processor))]
   pub async fn register_node_action<
     T,
     R: 'static + Send + Sync,

@@ -18,3 +18,4 @@ pub mod rabbitmq;
 mod routing;
 pub mod settings;
 pub mod start_process;
+pub mod tracing;

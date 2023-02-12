@@ -11,7 +11,6 @@ use crate::{
 };
 use chrono::Utc;
 use lapin::Channel;
-use log::trace;
 use mongodb::{
   bson::{doc, to_bson, Bson, Document},
   options::UpdateModifications,
@@ -19,6 +18,7 @@ use mongodb::{
 };
 use serde::Serialize;
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
+use tracing::{instrument, span, trace, Instrument};
 use yansi::Paint;
 
 lazy_static! {
@@ -26,6 +26,7 @@ lazy_static! {
 }
 
 #[allow(clippy::borrowed_box, clippy::too_many_arguments)]
+#[instrument(level = "debug", skip(channel, output_processor, events_collection))]
 pub async fn process_output<'a, R, O>(
   result: Option<R>,
   context: Arc<Context>,
@@ -76,6 +77,7 @@ pub async fn process_output<'a, R, O>(
                 }),
               None,
             )
+            .instrument(span!(tracing::Level::DEBUG, "mongo.update_one"))
             .await
             .unwrap();
 
@@ -106,6 +108,7 @@ pub async fn process_output<'a, R, O>(
               },
               None,
             )
+            .instrument(span!(tracing::Level::DEBUG, "mongo.insert_one"))
             .await
             .unwrap();
         }

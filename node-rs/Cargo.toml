@@ -10,8 +10,6 @@ edition = "2018"
 field_accessor_derive = {version= "0.1.0", path = "../field_accessor_derive" }
 anyhow = "1.0"
 lapin = { version = "2" }
-log = "^0.4"
-pretty_env_logger = "^0.4"
 mongodb = { version="2.3" , features = ["bson-chrono-0_4"]} # git= "https://github.com/mongodb/mongo-rust-driver"
 config = "0.13"
 serde = { version = "1.0", features = ["derive", "rc"] }
@@ -21,6 +19,19 @@ lazy_static = "1.4.0"
 uuid = { version = "0.8", features = ["serde", "v4"] }
 yansi = "0.5.0"
 openssl = { version = "0.10", features = ["vendored"] }
-tokio = { version = "1.24", features = ["full"] } # dev
+tokio = { version = "1.24", features = ["full", "tracing"] } # dev
 tokio-executor-trait = "2.1"
 tokio-reactor-trait = "1.1"
+tracing = "0.1"
+tracing-subscriber = {version="0.3", features=["env-filter"]}
+console-subscriber = {version="0.1", optional=true}
+tracing-forest = { version = "0.1", features = ["full"], optional=true }
+opentelemetry = { version = "0.18", features = ["rt-tokio"], optional=true }
+tracing-opentelemetry = { version = "0.18", optional=true }
+opentelemetry-jaeger = { version = "0.17", features = ["rt-tokio", "tokio"], optional=true }
+
+[features]
+default=["forest"]
+forest = ["dep:tracing-forest"]
+tokio-console = ["dep:console-subscriber"]
+otel = ["dep:opentelemetry", "dep:tracing-opentelemetry", "dep:opentelemetry-jaeger"]

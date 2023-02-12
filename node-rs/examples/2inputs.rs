@@ -1,5 +1,4 @@
 use field_accessor_derive::FieldAccessor;
-use log::{debug, info};
 use node_rs::{
   builder::GraphInternal,
   context::Context,
@@ -12,6 +11,7 @@ use node_rs::{
 };
 use serde::{Deserialize, Serialize};
 use std::{ops::Add, sync::Arc, time::Duration};
+use tracing::{debug, info};
 use yansi::Paint;
 
 // curl -X DELETE -u admin:admin 'http://localhost:15672/api/queues/%2F/flow_queue_proxy1/contents' 'http://localhost:15672/api/queues/%2F/flow_queue_proxy/contents' 'http://localhost:15672/api/queues/%2F/flow_queue_sum/contents'
@@ -41,7 +41,7 @@ struct StartOutput<T: Add> {
 
 #[tokio::main]
 async fn main() -> MainResult<()> {
-  pretty_env_logger::init_timed();
+  node_rs::tracing::init();
   let settings = Settings::new().unwrap();
   info!("{:?}", settings);
 
@@ -115,6 +115,7 @@ async fn main() -> MainResult<()> {
 
   let gi: GraphInternal = GraphInternal::new(graph.clone(), &channel, &channel_out);
 
+  #[tracing::instrument(level = "debug")]
   async fn sum_action(
     data: SumInput<u64>,
     _context: Arc<Context>,
@@ -135,6 +136,7 @@ async fn main() -> MainResult<()> {
   )
   .await;
 
+  #[tracing::instrument(level = "debug")]
   async fn proxy_action(
     data: ProxyData<u64>,
     _context: Arc<Context>,

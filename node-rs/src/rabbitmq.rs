@@ -18,10 +18,10 @@ use lapin::{
   types::FieldTable,
   BasicProperties, Channel, Connection, ConnectionProperties, Error, ExchangeKind,
 };
-use log::{debug, info, trace};
 use mongodb::bson::doc;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{collections::HashMap, fmt::Debug, future::Future, sync::Arc};
+use tracing::{debug, info, instrument, span, trace, Instrument};
 
 lazy_static! {
   static ref SETTINGS: Settings = Settings::new().unwrap();
@@ -153,84 +153,88 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
     let handle = handle.clone();
 
     async move {
-      handle.spawn(async move {
-        let events_collection = db::get_events_collection(&SETTINGS).await.unwrap();
+      handle.spawn(
+        async move {
+          let events_collection = db::get_events_collection(&SETTINGS).await.unwrap();
 
-        //      while let Some(delivery) = consumer.next().await {
-        // partof: #SPC-processing
-        let delivery = match delivery {
-          // Carries the delivery alongside its channel
-          Ok(Some(delivery)) => delivery,
-          // The consumer got canceled
-          Ok(None) => return,
-          // Carries the error and is always followed by Ok(None)
-          Err(error) => {
-            dbg!("Failed to consume queue message {}", error);
-            return;
-          }
-        }; //           let Some( delivery) = delivery.expect("error caught in consumer")
-           // else { panic!("Empty rabbitmq delivery") }; // FIXME: do better than panic.
-        trace!(
-          "Consume [ {} ] {:?} {:?}",
-          queue_name,
-          delivery,
-          String::from_utf8(delivery.data.clone())
-        );
+          //      while let Some(delivery) = consumer.next().await {
+          // partof: #SPC-processing
+          let delivery = match delivery {
+            // Carries the delivery alongside its channel
+            Ok(Some(delivery)) => delivery,
+            // The consumer got canceled
+            Ok(None) => return,
+            // Carries the error and is always followed by Ok(None)
+            Err(error) => {
+              dbg!("Failed to consume queue message {}", error);
+              return;
+            }
+          }; //           let Some( delivery) = delivery.expect("error caught in consumer")
+             // else { panic!("Empty rabbitmq delivery") }; // FIXME: do better than panic.
+          trace!(
+            "Consume [ {} ] {:?} {:?}",
+            queue_name,
+            delivery,
+            String::from_utf8(delivery.data.clone())
+          );
 
-        let mut relation = None;
-        for relationf in origin_map.get(&delivery.routing_key.to_string()).unwrap() {
-          if relationf.to.node == node.id {
-            relation = Some(relationf);
-            break;
+          let mut relation = None;
+          for relationf in origin_map.get(&delivery.routing_key.to_string()).unwrap() {
+            if relationf.to.node == node.id {
+              relation = Some(relationf);
+              break;
+            }
           }
+          let relation: Relation = relation.unwrap().clone();
+
+          let mut data: PartialFlowMessage = serde_json::from_slice(&delivery.data).unwrap();
+          debug!("Data {:?}", data);
+
+          // partof: #SPC-processing.missingInput
+          fetch_parameter(
+            &data.process_id,
+            &node,
+            &mut data.parameter,
+            &origin_map,
+            &events_collection,
+          )
+          .await;
+
+          // partof: #SPC-processing.actionContext
+          let context = Context {
+            process_id: data.process_id.clone(),
+            relation,
+            context: data.context.clone().unwrap_or_default(),
+          };
+
+          // partof: #SPC-processing.callAction
+          let (result, context): (Option<R>, Arc<Context>) = action(
+            serde_json::from_value::<T>(data.parameter).unwrap(),
+            Arc::new(context),
+          )
+          .await;
+
+          process_output(
+            result,
+            context,
+            &graph_id,
+            &data.process_id,
+            &node,
+            &destination_map,
+            &channel_out2,
+            &output_processor,
+            &events_collection,
+          )
+          .await;
+          delivery.ack(BasicAckOptions::default()).await.expect("ack");
         }
-        let relation: Relation = relation.unwrap().clone();
-
-        let mut data: PartialFlowMessage = serde_json::from_slice(&delivery.data).unwrap();
-        debug!("Data {:?}", data);
-
-        // partof: #SPC-processing.missingInput
-        fetch_parameter(
-          &data.process_id,
-          &node,
-          &mut data.parameter,
-          &origin_map,
-          &events_collection,
-        )
-        .await;
-
-        // partof: #SPC-processing.actionContext
-        let context = Context {
-          process_id: data.process_id.clone(),
-          relation,
-          context: data.context.clone().unwrap_or_default(),
-        };
-
-        // partof: #SPC-processing.callAction
-        let (result, context): (Option<R>, Arc<Context>) = action(
-          serde_json::from_value::<T>(data.parameter).unwrap(),
-          Arc::new(context),
-        )
-        .await;
-
-        process_output(
-          result,
-          context,
-          &graph_id,
-          &data.process_id,
-          &node,
-          &destination_map,
-          &channel_out2,
-          &output_processor,
-          &events_collection,
-        )
-        .await;
-        delivery.ack(BasicAckOptions::default()).await.expect("ack");
-      });
+        .instrument(span!(tracing::Level::INFO, "msg handler")),
+      );
     }
   });
 }
 
+#[instrument(level = "debug")]
 pub async fn send_message(
   channel: &Channel,
   graph_id: &str,

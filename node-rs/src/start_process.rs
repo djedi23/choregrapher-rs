@@ -15,7 +15,7 @@ use mongodb::{
   options::{UpdateModifications, UpdateOptions},
 };
 use serde::Serialize;
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::Arc};
 use tracing::{instrument, span, trace, Instrument};
 use uuid::Uuid;
 
@@ -24,7 +24,7 @@ use uuid::Uuid;
 ///  partof: #SPC-run.startProcess
 #[instrument(skip(chan, graph))]
 pub async fn start_process<T>(
-  chan: &Channel,
+  chan: Arc<Channel>,
   graph: GraphInternal<'_>,
   init: &T,
   context: &Option<FlowContext>,
@@ -125,7 +125,7 @@ where
     };
 
     send_message(
-      chan,
+      chan.clone(),
       &graph.id,
       &route.topic,
       serde_json::to_vec::<FlowMessage<&serde_json::Value>>(&payload).unwrap(),

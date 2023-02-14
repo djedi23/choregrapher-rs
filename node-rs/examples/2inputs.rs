@@ -160,7 +160,7 @@ async fn main() -> MainResult<()> {
   .await;
 
   let init = StartOutput { i1: 2, i2: 3 };
-  start_process(&channel_out, gi, &init, &None).await;
+  start_process(channel_out.clone(), gi, &init, &None).await;
 
   loop {
     tokio::time::sleep(Duration::from_millis(1000)).await;

@@ -34,7 +34,7 @@ pub trait FieldAccessor {
   fn field(self) -> Vec<String>;
 }
 
-pub async fn create_rabbit_mq(exchange_suffix: &str) -> Result<(Channel, Channel), Error> {
+pub async fn create_rabbit_mq(exchange_suffix: &str) -> Result<(Channel, Arc<Channel>), Error> {
   info!("Rabbitmq init");
   let rabbitmq_url = std::env::var("AMQP_ADDR").unwrap_or_else(|_| SETTINGS.rabbitmq.url.clone());
   let options = ConnectionProperties::default()
@@ -73,18 +73,18 @@ pub async fn create_rabbit_mq(exchange_suffix: &str) -> Result<(Channel, Channel
 
   //    info!("Declared queue {:?}", queue);
 
-  Ok((channel, channel_out))
+  Ok((channel, Arc::new(channel_out)))
 }
 
 #[rustfmt::skip::macros(doc)]
 #[allow(clippy::too_many_arguments)]
 pub async fn create_consumer<'de, Action, T, R, O, F>(
   channel: &Channel,
-  channel_out: &Channel,
-  destination_map: &HashMap<String, Vec<InputRef>>,
-  origin_map: &HashMap<String, Vec<Relation>>,
+  channel_out: Arc<Channel>,
+  destination_map: Arc<HashMap<String, Vec<InputRef>>>,
+  origin_map: Arc<HashMap<String, Vec<Relation>>>,
   graph_id: &str,
-  node: &Node,
+  node: Arc<Node>,
   action: Action,
   output_processor: Arc<
     impl OutputProcessing<INPUT = R, OUTPUT = O> + ?Sized + Sync + Send + 'static,
@@ -133,17 +133,12 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
     .await
     .unwrap();
 
-  // let channel2 = channel.clone();
-  let channel_out = channel_out.clone();
-  let node = node.clone();
-  let destination_map = destination_map.clone();
-  let origin_map = origin_map.clone();
   let graph_id = graph_id.to_owned();
   let handle = tokio::runtime::Handle::current();
 
-  info!("will consume");
+  info!("set consumer for {queue_name}");
   consumer.set_delegate(move |delivery: DeliveryResult| {
-    let channel_out2 = channel_out.clone();
+    let channel_out = channel_out.clone();
     let origin_map = origin_map.clone();
     let node = node.clone();
     let queue_name = queue_name.clone();
@@ -221,7 +216,7 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
             &data.process_id,
             &node,
             &destination_map,
-            &channel_out2,
+            channel_out,
             &output_processor,
             &events_collection,
           )
@@ -236,7 +231,7 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
 
 #[instrument(level = "debug")]
 pub async fn send_message(
-  channel: &Channel,
+  channel: Arc<Channel>,
   graph_id: &str,
   topic: &str,
   payload: Vec<u8>,

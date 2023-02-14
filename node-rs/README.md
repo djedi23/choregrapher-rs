@@ -132,7 +132,7 @@ Finaly, let's associate the graph and the function in the system. After this lin
 Inject some data in the graph:
 ```rust
     let init = FactResult::O(Fact::N(20, 1));
-    start_process(&channel_out, graph, &init, &None).await;
+    start_process(channel_out.clone(), graph, &init, &None).await;
 ```
 
 

@@ -104,7 +104,7 @@ async fn main() -> MainResult<()> {
   .await;
 
   let init = FactResult::O(Fact::N(20, 1));
-  start_process(&channel_out, gi, &init, &None).await;
+  start_process(channel_out.clone(), gi, &init, &None).await;
 
   loop {
     tokio::time::sleep(std::time::Duration::from_millis(1000)).await;

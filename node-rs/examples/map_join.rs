@@ -350,7 +350,13 @@ async fn main() -> MainResult<()> {
   .await;
 
   let init = VecFact { i: vec![3, 10, 5] };
-  start_process(&channel_out, gi, &init, &Some(FlowContext::default())).await;
+  start_process(
+    channel_out.clone(),
+    gi,
+    &init,
+    &Some(FlowContext::default()),
+  )
+  .await;
 
   loop {
     tokio::time::sleep(std::time::Duration::from_millis(1000)).await;

@@ -34,7 +34,7 @@ pub async fn process_output<'a, R, O>(
   process_id: &str,
   node: &Node,
   destination_map: &'a HashMap<String, Vec<InputRef>>,
-  channel: &Channel,
+  channel: Arc<Channel>,
   output_processor: &Arc<impl OutputProcessing<INPUT = R, OUTPUT = O> + ?Sized + 'static>,
   events_collection: &Collection<Document>,
 ) where
@@ -124,7 +124,7 @@ pub async fn process_output<'a, R, O>(
 
         // partof: #SPC-processing.sendOutput
         send_message(
-          channel,
+          channel.clone(),
           graph_id,
           &route.topic,
           serde_json::to_vec::<FlowMessage<&serde_json::Value>>(&payload).unwrap(),

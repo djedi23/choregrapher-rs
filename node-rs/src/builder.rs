@@ -17,31 +17,31 @@ pub struct GraphInternal<'a> {
   /// graph id
   pub(crate) id: String,
   /// A copy of the nodes
-  nodes: HashMap<String, Node>,
+  nodes: HashMap<String, Arc<Node>>,
   /// Dict of node input from node output. Used when you send message
   /// to node input.
-  pub(crate) destination_map: HashMap<String, Vec<InputRef>>,
-  origin_map: HashMap<String, Vec<Relation>>,
+  pub(crate) destination_map: Arc<HashMap<String, Vec<InputRef>>>,
+  origin_map: Arc<HashMap<String, Vec<Relation>>>,
 
   /// Copy for internal use
   channel: &'a Channel,
   /// Copy for internal use
-  channel_out: &'a Channel,
+  channel_out: &'a Arc<Channel>,
 }
 
 impl<'a> GraphInternal<'a> {
   /// Create a new graph internals from a graph description
   /// param graph the graph description to internalize
-  pub fn new(graph: Graph, channel: &'a Channel, channel_out: &'a Channel) -> GraphInternal<'a> {
+  pub fn new(graph: Graph, channel: &'a Channel, channel_out: &'a Arc<Channel>) -> GraphInternal<'a> {
     let id = graph.id;
     let mut nodes = HashMap::new();
     for node in graph.nodes {
-      let nodecopy = Node {
+      let nodecopy = Arc::new(Node {
         id: node.id.to_string(),
         name: node.name.to_string(),
         input: node.input.clone(),
         output: node.output.clone(),
-      };
+      });
       nodes.insert(node.id.to_string(), nodecopy);
     }
     let settings = Settings::new().unwrap();
@@ -79,15 +79,15 @@ impl<'a> GraphInternal<'a> {
     GraphInternal {
       id,
       nodes,
-      destination_map,
-      origin_map,
+      destination_map: Arc::new(destination_map),
+      origin_map: Arc::new(origin_map),
       channel,
       channel_out,
     }
   }
 
   /// Get a node by its id
-  fn node(&self, id: &str) -> Option<&Node> {
+  fn node(&self, id: &str) -> Option<&Arc<Node>> {
     self.nodes.get(id)
   }
 
@@ -122,11 +122,11 @@ impl<'a> GraphInternal<'a> {
 
       create_consumer(
         self.channel,
-        self.channel_out,
-        &self.destination_map,
-        &self.origin_map,
+        self.channel_out.clone(),
+        self.destination_map.clone(),
+        self.origin_map.clone(),
         &self.id,
-        node,
+        node.clone(),
         action,
         op,
       )

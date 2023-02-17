@@ -6,14 +6,14 @@ use crate::{
   output_processor::{DefaultOutputProcessor, OutputProcessing},
   rabbitmq::{create_consumer, FieldAccessor},
   settings::Settings,
+  App,
 };
-use lapin::Channel;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{collections::HashMap, fmt::Debug, future::Future, sync::Arc};
 use tracing::instrument;
 
 /// Hold the internal information to process a graph
-pub struct GraphInternal<'a> {
+pub struct GraphInternal {
   /// graph id
   pub(crate) id: String,
   /// A copy of the nodes
@@ -24,15 +24,13 @@ pub struct GraphInternal<'a> {
   origin_map: Arc<HashMap<String, Vec<Relation>>>,
 
   /// Copy for internal use
-  channel: &'a Channel,
-  /// Copy for internal use
-  channel_out: &'a Arc<Channel>,
+  app: Arc<App>,
 }
 
-impl<'a> GraphInternal<'a> {
+impl GraphInternal {
   /// Create a new graph internals from a graph description
   /// param graph the graph description to internalize
-  pub fn new(graph: Graph, channel: &'a Channel, channel_out: &'a Arc<Channel>) -> GraphInternal<'a> {
+  pub fn new(graph: Graph, app: Arc<App>) -> GraphInternal {
     let id = graph.id;
     let mut nodes = HashMap::new();
     for node in graph.nodes {
@@ -81,8 +79,7 @@ impl<'a> GraphInternal<'a> {
       nodes,
       destination_map: Arc::new(destination_map),
       origin_map: Arc::new(origin_map),
-      channel,
-      channel_out,
+      app,
     }
   }
 
@@ -121,8 +118,7 @@ impl<'a> GraphInternal<'a> {
         };
 
       create_consumer(
-        self.channel,
-        self.channel_out.clone(),
+        self.app.clone(),
         self.destination_map.clone(),
         self.origin_map.clone(),
         &self.id,

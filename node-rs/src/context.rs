@@ -1,4 +1,4 @@
-use crate::graph::Relation;
+use crate::{graph::Relation, App};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -28,12 +28,16 @@ impl Default for FlowContext {
 
 /// The context used by the node's action.
 /// It contains some metadata and some shared variables
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Context {
   pub process_id: String,
   pub relation: Relation,
   /// The context that will travel with the messages. You can read and modify it.
   pub context: FlowContext,
+  /// The application context (collections, channels)
+  // It's an option to be able to test the Context without settings up a real mongo and rabbmitmq
+  #[serde(skip)]
+  pub app: Option<Arc<App>>,
 }
 
 impl Context {
@@ -64,7 +68,8 @@ impl Context {
   ///        },
   ///      },
   ///      context: FlowContext::default(),
-  ///  };
+  ///      app: None,
+  /// };
   ///
   ///  context.insert_label("key".into(), json!(5));
   ///  assert_eq!(to_string(&context).unwrap(), "{\"process_id\":\"id\",\"relation\":{\"from\":{\"node\":\"a\",\"output\":\"o\"},\"to\":{\"node\":\"n\",\"input\":\"i\"}},\"context\":{\"labels\":{\"key\":5},\"context\":{}}}" );
@@ -105,7 +110,8 @@ impl Context {
   ///          input: "i".to_string(),
   ///        },
   ///      },
-  ///      context: FlowContext::default(),
+  ///     context: FlowContext::default(),
+  ///     app: None
   ///  };
   ///
   ///  context.insert_context("key".into(), json!(5));
@@ -119,11 +125,9 @@ impl Context {
 
 #[cfg(test)]
 mod tests {
-  use serde_json::json;
-
-  use crate::graph::{InputRef, OutputRef};
-
   use super::*;
+  use crate::graph::{InputRef, OutputRef};
+  use serde_json::json;
 
   // #SPC-processing.tst-context_serialize_context_1
   #[test]
@@ -144,11 +148,12 @@ mod tests {
         labels: Arc::new(Mutex::new(HashMap::new())),
         context: Arc::new(Mutex::new(HashMap::new())),
       },
+      app: None,
     }) {
       assert_eq!(
-         json,
-         "{\"process_id\":\"id\",\"relation\":{\"from\":{\"node\":\"a\",\"output\":\"o\"},\"to\":{\"node\":\"n\",\"input\":\"i\"}},\"context\":{\"labels\":{},\"context\":{}}}"
-       )
+       json,
+       "{\"process_id\":\"id\",\"relation\":{\"from\":{\"node\":\"a\",\"output\":\"o\"},\"to\":{\"node\":\"n\",\"input\":\"i\"}},\"context\":{\"labels\":{},\"context\":{}}}"
+     )
     };
   }
 
@@ -159,28 +164,28 @@ mod tests {
     labels.insert("key".into(), json!(5));
 
     match serde_json::to_string(&Context {
-      process_id: "id".into(),
-      relation: Relation {
-        from: OutputRef {
-          node: "a".to_string(),
-          output: "o".to_string(),
-        },
-        to: InputRef {
-          node: "n".to_string(),
-          input: "i".to_string(),
-        },
+    process_id: "id".into(),
+    relation: Relation {
+      from: OutputRef {
+        node: "a".to_string(),
+        output: "o".to_string(),
       },
-      context: FlowContext {
-        labels: Arc::new(Mutex::new(labels)),
-        context: Arc::new(Mutex::new(HashMap::new())),
+      to: InputRef {
+        node: "n".to_string(),
+        input: "i".to_string(),
       },
-    }) {
-      Ok(json) => assert_eq!(
-        json,
-        "{\"process_id\":\"id\",\"relation\":{\"from\":{\"node\":\"a\",\"output\":\"o\"},\"to\":{\"node\":\"n\",\"input\":\"i\"}},\"context\":{\"labels\":{\"key\":5},\"context\":{}}}"
-      ),
-      _ => unreachable!( "Error during the Context serialization."),
-    };
+    },
+    context: FlowContext {
+      labels: Arc::new(Mutex::new(labels)),
+      context: Arc::new(Mutex::new(HashMap::new())),
+    }, app:None
+  }) {
+    Ok(json) => assert_eq!(
+      json,
+      "{\"process_id\":\"id\",\"relation\":{\"from\":{\"node\":\"a\",\"output\":\"o\"},\"to\":{\"node\":\"n\",\"input\":\"i\"}},\"context\":{\"labels\":{\"key\":5},\"context\":{}}}"
+    ),
+    _ => unreachable!( "Error during the Context serialization."),
+  };
   }
 
   // #SPC-processing.tst-context_serialize_context_3
@@ -190,28 +195,28 @@ mod tests {
     context.insert("key".into(), json!(5));
 
     match serde_json::to_string(&Context {
-      process_id: "id".into(),
-      relation: Relation {
-        from: OutputRef {
-          node: "a".to_string(),
-          output: "o".to_string(),
-        },
-        to: InputRef {
-          node: "n".to_string(),
-          input: "i".to_string(),
-        },
+    process_id: "id".into(),
+    relation: Relation {
+      from: OutputRef {
+        node: "a".to_string(),
+        output: "o".to_string(),
       },
-      context: FlowContext {
-        labels: Arc::new(Mutex::new(HashMap::new())),
-        context: Arc::new(Mutex::new(context)),
+      to: InputRef {
+        node: "n".to_string(),
+        input: "i".to_string(),
       },
-    }) {
-      Ok(json) => assert_eq!(
-        json,
-        "{\"process_id\":\"id\",\"relation\":{\"from\":{\"node\":\"a\",\"output\":\"o\"},\"to\":{\"node\":\"n\",\"input\":\"i\"}},\"context\":{\"labels\":{},\"context\":{\"key\":5}}}"
-      ),
-      _ => unreachable!( "Error during the Context serialization."),
-    };
+    },
+    context: FlowContext {
+      labels: Arc::new(Mutex::new(HashMap::new())),
+      context: Arc::new(Mutex::new(context)),
+    }, app:None
+  }) {
+    Ok(json) => assert_eq!(
+      json,
+      "{\"process_id\":\"id\",\"relation\":{\"from\":{\"node\":\"a\",\"output\":\"o\"},\"to\":{\"node\":\"n\",\"input\":\"i\"}},\"context\":{\"labels\":{},\"context\":{\"key\":5}}}"
+    ),
+    _ => unreachable!( "Error during the Context serialization."),
+  };
   }
 
   #[test]
@@ -229,17 +234,18 @@ mod tests {
         },
       },
       context: FlowContext::default(),
+      app: None,
     };
 
     context.insert_label("key".into(), json!(5));
 
     match serde_json::to_string(&context) {
-      Ok(json) => assert_eq!(
-        json,
-        "{\"process_id\":\"id\",\"relation\":{\"from\":{\"node\":\"a\",\"output\":\"o\"},\"to\":{\"node\":\"n\",\"input\":\"i\"}},\"context\":{\"labels\":{\"key\":5},\"context\":{}}}"
-      ),
-      _ => unreachable!( "Error during the Context serialization."),
-    };
+    Ok(json) => assert_eq!(
+      json,
+      "{\"process_id\":\"id\",\"relation\":{\"from\":{\"node\":\"a\",\"output\":\"o\"},\"to\":{\"node\":\"n\",\"input\":\"i\"}},\"context\":{\"labels\":{\"key\":5},\"context\":{}}}"
+    ),
+    _ => unreachable!( "Error during the Context serialization."),
+  };
   }
 
   #[test]
@@ -257,6 +263,7 @@ mod tests {
         },
       },
       context: FlowContext::default(),
+      app: None,
     };
 
     context.insert_label("key".into(), json!(1));
@@ -292,6 +299,7 @@ mod tests {
         labels: Arc::new(Mutex::new(labels)),
         context: Arc::new(Mutex::new(HashMap::new())),
       },
+      app: None,
     };
 
     assert_eq!(context.get_label("key".into()).unwrap(), json!(5));
@@ -312,17 +320,18 @@ mod tests {
         },
       },
       context: FlowContext::default(),
+      app: None,
     };
 
     context.insert_context("key".into(), json!(5));
 
     match serde_json::to_string(&context) {
-      Ok(json) => assert_eq!(
-        json,
-        "{\"process_id\":\"id\",\"relation\":{\"from\":{\"node\":\"a\",\"output\":\"o\"},\"to\":{\"node\":\"n\",\"input\":\"i\"}},\"context\":{\"labels\":{},\"context\":{\"key\":5}}}"
-      ),
-      _ => unreachable!( "Error during the Context serialization."),
-    };
+    Ok(json) => assert_eq!(
+      json,
+      "{\"process_id\":\"id\",\"relation\":{\"from\":{\"node\":\"a\",\"output\":\"o\"},\"to\":{\"node\":\"n\",\"input\":\"i\"}},\"context\":{\"labels\":{},\"context\":{\"key\":5}}}"
+    ),
+    _ => unreachable!( "Error during the Context serialization."),
+  };
   }
 
   #[test]
@@ -340,6 +349,7 @@ mod tests {
         },
       },
       context: FlowContext::default(),
+      app: None,
     };
 
     context.insert_context("key".into(), json!(1));
@@ -375,6 +385,7 @@ mod tests {
         labels: Arc::new(Mutex::new(HashMap::new())),
         context: Arc::new(Mutex::new(context_context)),
       },
+      app: None,
     };
 
     assert_eq!(context.get_context("key".into()).unwrap(), json!(5));

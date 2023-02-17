@@ -81,7 +81,7 @@ pub(crate) struct GetOptions {
   outputs: Vec<String>,
 }
 
-pub(crate) async fn fs(fs_opts: &FsOptions, _opt: &Opts, settings: &Settings) -> Result<()> {
+pub(crate) async fn fs(fs_opts: &FsOptions, _opt: &Opts, settings: Arc<Settings>) -> Result<()> {
   match &fs_opts.command {
     FsSubCommand::Ls(opts) => ls(opts, settings).await,
     FsSubCommand::Put(opts) => put(opts, settings).await,
@@ -125,11 +125,11 @@ impl ProgressUpdate for Progression {
   }
 }
 
-async fn ls(opts: &LsOptions, settings: &Settings) -> Result<()> {
+async fn ls(opts: &LsOptions, settings: Arc<Settings>) -> Result<()> {
   let spin = ProgressBar::new_spinner();
   spin.enable_steady_tick(150);
   spin.set_message("Fetching files");
-  let db = get_database(settings).await.context("Accessing mongo")?;
+  let db = get_database(&settings).await.context("Accessing mongo")?;
   let bucket = GridFSBucket::new(
     db,
     Some(
@@ -159,7 +159,7 @@ async fn ls(opts: &LsOptions, settings: &Settings) -> Result<()> {
       Ok(document) => {
         let file: GridFile = from_document(document).context("Can't decode the files")?;
         if opts.long {
-          println!("{}", file);
+          println!("{file}");
         } else {
           println!("{}", file._id);
         }
@@ -170,11 +170,11 @@ async fn ls(opts: &LsOptions, settings: &Settings) -> Result<()> {
   Ok::<(), Error>(())
 }
 
-async fn put(opts: &PutOptions, settings: &Settings) -> Result<()> {
+async fn put(opts: &PutOptions, settings: Arc<Settings>) -> Result<()> {
   let spin = ProgressBar::new_spinner();
   spin.enable_steady_tick(150);
   spin.set_message("Connecting");
-  let db = get_database(settings).await.context("Accessing mongo")?;
+  let db = get_database(&settings).await.context("Accessing mongo")?;
   let bucket = GridFSBucket::new(
     db,
     Some(
@@ -217,14 +217,14 @@ async fn put(opts: &PutOptions, settings: &Settings) -> Result<()> {
   Ok::<(), Error>(())
 }
 
-async fn get(opts: &GetOptions, settings: &Settings) -> Result<()> {
+async fn get(opts: &GetOptions, settings: Arc<Settings>) -> Result<()> {
   let mut spin = ProgressBar::hidden();
   if !opts.quiet {
     spin = ProgressBar::new_spinner();
     spin.enable_steady_tick(150);
     spin.set_message("Connecting");
   }
-  let db = get_database(settings).await.context("Accessing mongo")?;
+  let db = get_database(&settings).await.context("Accessing mongo")?;
   let bucket = GridFSBucket::new(
     db,
     Some(
@@ -253,7 +253,7 @@ async fn get(opts: &GetOptions, settings: &Settings) -> Result<()> {
         } else {
           filename = file_document
             .get_str("filename")
-            .context(format!("Filename not found for document {:?}", id))?;
+            .context(format!("Filename not found for document {id:?}"))?;
         }
       }
       let mut spin = ProgressBar::hidden();
@@ -261,7 +261,7 @@ async fn get(opts: &GetOptions, settings: &Settings) -> Result<()> {
         spin = ProgressBar::new(
           file_document
             .get_i64("length")
-            .context(format!("Size not found for document {:?}", id))? as u64,
+            .context(format!("Size not found for document {id:?}"))? as u64,
         );
         spin.set_style(
           ProgressStyle::default_bar()
@@ -289,7 +289,7 @@ async fn get(opts: &GetOptions, settings: &Settings) -> Result<()> {
       }
       spin.finish_and_clear();
       if !opts.stdout {
-        println!("{}", id);
+        println!("{id}");
       }
     }
   }

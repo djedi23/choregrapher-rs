@@ -1,12 +1,12 @@
 use crate::{
   context::Context,
-  db,
   fetchparameter::fetch_parameter,
   flow_message::PartialFlowMessage,
   graph::{InputRef, Node, Relation},
   output_processor::OutputProcessing,
   process_output::process_output,
   settings::Settings,
+  App,
 };
 use lapin::{
   message::DeliveryResult,
@@ -18,14 +18,9 @@ use lapin::{
   types::FieldTable,
   BasicProperties, Channel, Connection, ConnectionProperties, Error, ExchangeKind,
 };
-use mongodb::bson::doc;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{collections::HashMap, fmt::Debug, future::Future, sync::Arc};
 use tracing::{debug, info, instrument, span, trace, Instrument};
-
-lazy_static! {
-  static ref SETTINGS: Settings = Settings::new().unwrap();
-}
 
 pub trait FieldAccessor {
   fn field_list(self) -> Vec<String>;
@@ -34,9 +29,12 @@ pub trait FieldAccessor {
   fn field(self) -> Vec<String>;
 }
 
-pub async fn create_rabbit_mq(exchange_suffix: &str) -> Result<(Channel, Arc<Channel>), Error> {
+pub async fn create_rabbit_mq(
+  exchange_suffix: &str,
+  settings: Arc<Settings>,
+) -> Result<(Arc<Channel>, Arc<Channel>), Error> {
   info!("Rabbitmq init");
-  let rabbitmq_url = std::env::var("AMQP_ADDR").unwrap_or_else(|_| SETTINGS.rabbitmq.url.clone());
+  let rabbitmq_url = std::env::var("AMQP_ADDR").unwrap_or_else(|_| settings.rabbitmq.url.clone());
   let options = ConnectionProperties::default()
     // Use tokio executor and reactor.
     // At the moment the reactor is only available for unix.
@@ -46,7 +44,7 @@ pub async fn create_rabbit_mq(exchange_suffix: &str) -> Result<(Channel, Arc<Cha
 
   let channel = connection.create_channel().await?;
   let channel_out = connection.create_channel().await?;
-  let exchange_name = (SETTINGS.rabbitmq.exchange_name.to_owned()) + "_" + exchange_suffix;
+  let exchange_name = (settings.rabbitmq.exchange_name.to_owned()) + "_" + exchange_suffix;
 
   debug!("rabbitmq.exchange_name = {}", &exchange_name);
 
@@ -68,19 +66,18 @@ pub async fn create_rabbit_mq(exchange_suffix: &str) -> Result<(Channel, Arc<Cha
 
   // partof: #SPC-rabbitmq.prefetch
   channel
-    .basic_qos(SETTINGS.rabbitmq.prefetch_count, BasicQosOptions::default())
+    .basic_qos(settings.rabbitmq.prefetch_count, BasicQosOptions::default())
     .await?;
 
   //    info!("Declared queue {:?}", queue);
 
-  Ok((channel, Arc::new(channel_out)))
+  Ok((Arc::new(channel), Arc::new(channel_out)))
 }
 
 #[rustfmt::skip::macros(doc)]
 #[allow(clippy::too_many_arguments)]
 pub async fn create_consumer<'de, Action, T, R, O, F>(
-  channel: &Channel,
-  channel_out: Arc<Channel>,
+  app: Arc<App>,
   destination_map: Arc<HashMap<String, Vec<InputRef>>>,
   origin_map: Arc<HashMap<String, Vec<Relation>>>,
   graph_id: &str,
@@ -100,21 +97,23 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
     durable: true,
     ..Default::default()
   };
-  let queue_name = SETTINGS.rabbitmq.queue_name.clone() + "_" + &node.id;
-  let exchange_name = (SETTINGS.rabbitmq.exchange_name.to_owned()) + "_" + graph_id;
+  let queue_name = app.settings.rabbitmq.queue_name.clone() + "_" + &node.id;
+  let exchange_name = (app.settings.rabbitmq.exchange_name.to_owned()) + "_" + graph_id;
   // partof: #SPC-rabbitmq #SPC-rabbitmq.nodeHaveQueue
-  channel
+  app
+    .channel
     .queue_declare(&queue_name, queue_declare_options, FieldTable::default())
     .await
     .unwrap();
 
   for input in &node.input {
     // partof: #SPC-rabbitmq.inputBindTopic
-    channel
+    app
+      .channel
       .queue_bind(
         &queue_name,
         &exchange_name,
-        &(SETTINGS.rabbitmq.routing_key.clone() + "." + &node.id + "_" + input),
+        &(app.settings.rabbitmq.routing_key.clone() + "." + &node.id + "_" + input),
         QueueBindOptions::default(),
         FieldTable::default(),
       )
@@ -122,7 +121,8 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
       .unwrap();
   }
 
-  let consumer = channel
+  let consumer = app
+    .channel
     .clone()
     .basic_consume(
       &queue_name,
@@ -138,7 +138,6 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
 
   info!("set consumer for {queue_name}");
   consumer.set_delegate(move |delivery: DeliveryResult| {
-    let channel_out = channel_out.clone();
     let origin_map = origin_map.clone();
     let node = node.clone();
     let queue_name = queue_name.clone();
@@ -146,12 +145,11 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
     let destination_map = destination_map.clone();
     let output_processor = output_processor.clone();
     let handle = handle.clone();
+    let app = app.clone();
 
     async move {
       handle.spawn(
         async move {
-          let events_collection = db::get_events_collection(&SETTINGS).await.unwrap();
-
           //      while let Some(delivery) = consumer.next().await {
           // partof: #SPC-processing
           let delivery = match delivery {
@@ -191,7 +189,7 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
             &node,
             &mut data.parameter,
             &origin_map,
-            &events_collection,
+            app.clone(),
           )
           .await;
 
@@ -200,6 +198,7 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
             process_id: data.process_id.clone(),
             relation,
             context: data.context.clone().unwrap_or_default(),
+            app: Some(app.clone()),
           };
 
           // partof: #SPC-processing.callAction
@@ -216,9 +215,8 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
             &data.process_id,
             &node,
             &destination_map,
-            channel_out,
             &output_processor,
-            &events_collection,
+            app,
           )
           .await;
           delivery.ack(BasicAckOptions::default()).await.expect("ack");
@@ -231,23 +229,24 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
 
 #[instrument(level = "debug")]
 pub async fn send_message(
-  channel: Arc<Channel>,
+  app: Arc<App>,
   graph_id: &str,
   topic: &str,
   payload: Vec<u8>,
 ) -> lapin::Result<Confirmation> {
   let publish_properties = BasicProperties::default();
   let publish_properties = publish_properties.with_delivery_mode(2);
-  let exchange_name = (SETTINGS.rabbitmq.exchange_name.to_owned()) + "_" + graph_id;
+  let exchange_name = (app.settings.rabbitmq.exchange_name.to_owned()) + "_" + graph_id;
   trace!(
     "Send Message [ {} : {} ] {:?} {:?}",
     &exchange_name,
     topic,
     String::from_utf8(payload.clone()),
-    channel
+    app.channel
   );
 
-  channel
+  app
+    .channel
     .basic_publish(
       &exchange_name,
       topic,

@@ -1,32 +1,24 @@
 use crate::{
   context::Context,
-  db,
   flow_message::FlowMessage,
   graph::{InputRef, Node},
   output_processor::OutputProcessing,
-  rabbitmq::send_message,
-  rabbitmq::FieldAccessor,
+  rabbitmq::{send_message, FieldAccessor},
   routing::routing,
-  settings::Settings,
+  App,
 };
 use chrono::Utc;
-use lapin::Channel;
 use mongodb::{
-  bson::{doc, to_bson, Bson, Document},
+  bson::{doc, to_bson, Bson},
   options::UpdateModifications,
-  Collection,
 };
 use serde::Serialize;
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 use tracing::{instrument, span, trace, Instrument};
 use yansi::Paint;
 
-lazy_static! {
-  static ref SETTINGS: Settings = Settings::new().unwrap();
-}
-
 #[allow(clippy::borrowed_box, clippy::too_many_arguments)]
-#[instrument(level = "debug", skip(channel, output_processor, events_collection))]
+#[instrument(level = "debug", skip(output_processor, app))]
 pub async fn process_output<'a, R, O>(
   result: Option<R>,
   context: Arc<Context>,
@@ -34,15 +26,14 @@ pub async fn process_output<'a, R, O>(
   process_id: &str,
   node: &Node,
   destination_map: &'a HashMap<String, Vec<InputRef>>,
-  channel: Arc<Channel>,
   output_processor: &Arc<impl OutputProcessing<INPUT = R, OUTPUT = O> + ?Sized + 'static>,
-  events_collection: &Collection<Document>,
+  app: Arc<App>,
 ) where
   R: Debug + Serialize + FieldAccessor + Clone,
   O: Debug + Serialize + FieldAccessor + Clone,
 {
   if let Some(result) = result {
-    let collection = db::get_collection(&SETTINGS).await.unwrap();
+    let collection = app.runs_collection.clone();
 
     // partof: #SPC-processing.node_outputprocessing
     for (result, context) in output_processor.process(result, context) {
@@ -81,11 +72,12 @@ pub async fn process_output<'a, R, O>(
             .await
             .unwrap();
 
-          events_collection
+          app
+            .events_collection
             .insert_one(
               doc! {
                   "type": "updateOne",
-                  "collection": &SETTINGS.database.collection,
+                  "collection": &app.settings.database.collection,
                   "filter": {
                 "processId": process_id
                   },
@@ -115,7 +107,7 @@ pub async fn process_output<'a, R, O>(
       }
 
       // partof: #SPC-processing.callRoutingOutput
-      for route in routing(destination_map, node, &result) {
+      for route in routing(destination_map, node, &result, app.settings.clone()) {
         let payload = FlowMessage {
           process_id: process_id.to_string(),
           parameter: &route.payload,
@@ -124,7 +116,7 @@ pub async fn process_output<'a, R, O>(
 
         // partof: #SPC-processing.sendOutput
         send_message(
-          channel.clone(),
+          app.clone(),
           graph_id,
           &route.topic,
           serde_json::to_vec::<FlowMessage<&serde_json::Value>>(&payload).unwrap(),

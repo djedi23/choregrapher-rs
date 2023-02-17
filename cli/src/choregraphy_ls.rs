@@ -7,7 +7,7 @@ use mongodb::{
   options::FindOptions,
 };
 use node_rs::{db::get_graph_collection, settings::Settings};
-use std::fmt;
+use std::{fmt, sync::Arc};
 use tokio_stream::StreamExt;
 
 impl fmt::Display for Choregraphy {
@@ -25,11 +25,11 @@ impl fmt::Display for Choregraphy {
   }
 }
 
-pub async fn ls(_opt: &Opts, settings: &Settings) -> Result<()> {
+pub async fn ls(_opt: &Opts, settings: Arc<Settings>) -> Result<()> {
   let spin = ProgressBar::new_spinner();
   spin.enable_steady_tick(150);
   spin.set_message("Fetching chroregraphies");
-  let collection = get_graph_collection(settings)
+  let collection = get_graph_collection(&settings)
     .await
     .context("Accessing mongo")?;
 
@@ -44,7 +44,7 @@ pub async fn ls(_opt: &Opts, settings: &Settings) -> Result<()> {
     match result {
       Ok(document) => {
         let chor: Choregraphy = from_document(document).context("Can't decode the choregraphies")?;
-        println!("{}", chor);
+        println!("{chor}");
       }
       Err(e) => return Err(e.into()),
     }

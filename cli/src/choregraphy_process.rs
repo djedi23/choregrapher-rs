@@ -9,6 +9,7 @@ use mongodb::{
 };
 use node_rs::{db::get_collection, settings::Settings};
 use serde::Deserialize;
+use std::sync::Arc;
 use tokio_stream::StreamExt;
 
 #[derive(Deserialize, Debug)]
@@ -35,12 +36,12 @@ impl fmt::Display for Process {
 pub(crate) async fn process(
   process_opts: &ChoregraphyProcessOptions,
   _opt: &Opts,
-  settings: &Settings,
+  settings: Arc<Settings>,
 ) -> Result<()> {
   let spin = ProgressBar::new_spinner();
   spin.enable_steady_tick(150);
   spin.set_message("Fetching processes");
-  let collection = get_collection(settings).await.context("Accessing mongo")?;
+  let collection = get_collection(&settings).await.context("Accessing mongo")?;
   let mut options = FindOptions::default();
   if process_opts.time {
     options.sort = Some(doc! {"timestamp": ( if process_opts.reverse {1} else {-1}) })
@@ -62,7 +63,7 @@ pub(crate) async fn process(
       Ok(document) => {
         let process: Process = from_document(document).context("Can't decode the process")?;
         if _opt.verbose > 0 || process_opts.verbose {
-          println!("{}", process);
+          println!("{process}");
         } else {
           println!("{}", process.process_id);
         }

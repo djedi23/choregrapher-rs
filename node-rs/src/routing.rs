@@ -5,13 +5,9 @@ use crate::{
 };
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::{collections::HashMap, fmt::Debug};
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 use tracing::trace;
 use yansi::Paint;
-
-lazy_static! {
-  static ref SETTINGS: Settings = Settings::new().unwrap();
-}
 
 #[derive(Debug)]
 pub struct Route {
@@ -35,6 +31,7 @@ pub fn routing<R: Debug + Clone + FieldAccessor + Serialize>(
   destination_map: &HashMap<String, Vec<InputRef>>,
   node: &Node,
   result: &R,
+  settings: Arc<Settings>,
 ) -> Vec<Route> {
   result
     .clone()
@@ -59,7 +56,7 @@ pub fn routing<R: Debug + Clone + FieldAccessor + Serialize>(
                 Value::Object(o) => {
                   let payload = json!({ir.input.to_string() : o.get(output_field).unwrap().clone()});
                   Route {
-                    topic: SETTINGS.rabbitmq.routing_key.clone() + "." + &ir.node + "_" + &ir.input,
+                    topic: settings.rabbitmq.routing_key.clone() + "." + &ir.node + "_" + &ir.input,
                     payload,
                   }
                 }
@@ -223,7 +220,12 @@ mod tests {
       R(T),
     }
     let result = FactResult::O(Fact::N(10, 15));
-    let routes = routing(&destination_map, &node, &result);
+    let routes = routing(
+      &destination_map,
+      &node,
+      &result,
+      Arc::new(Settings::default()),
+    );
 
     assert_eq!(routes.len(), 1);
     let route = &routes[0];
@@ -272,7 +274,12 @@ mod tests {
       R(T),
     }
     let result = FactResult::O(Fact::N(10, 15));
-    let routes = routing(&destination_map, &node, &result);
+    let routes = routing(
+      &destination_map,
+      &node,
+      &result,
+      Arc::new(Settings::default()),
+    );
 
     assert_eq!(routes.len(), 2);
     let route = &routes[0];
@@ -324,7 +331,12 @@ mod tests {
       R(T),
     }
     let result = FactResult::R(2);
-    let routes = routing(&destination_map, &node, &result);
+    let routes = routing(
+      &destination_map,
+      &node,
+      &result,
+      Arc::new(Settings::default()),
+    );
 
     assert_eq!(routes.len(), 0, "No route should be returned");
   }
@@ -373,7 +385,12 @@ mod tests {
     }
 
     let result = StartOutput { o: 2, o2: 5 };
-    let routes = routing(&destination_map, &node, &result);
+    let routes = routing(
+      &destination_map,
+      &node,
+      &result,
+      Arc::new(Settings::default()),
+    );
 
     assert_eq!(routes.len(), 2);
     let route = &routes[0];

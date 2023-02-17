@@ -6,14 +6,13 @@ use mongodb::{
 use node_rs::{
   builder::GraphInternal,
   context::{Context, FlowContext},
-  db,
   flow_message::PartialNodeOutput,
   graph::{Graph, InputRef, Node, OutputRef, Relation},
   main_error::MainResult,
   output_processor::{DefaultOutputProcessor, OutputProcessing},
-  rabbitmq::{create_rabbit_mq, FieldAccessor},
-  settings::Settings,
+  rabbitmq::FieldAccessor,
   start_process::start_process,
+  App,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -104,7 +103,7 @@ impl OutputProcessing for MapOutputProcessing {
       .into_iter()
       .enumerate()
       .map(|(i, o)| {
-        let ctx: Context = serde_json::from_str(&serde_json::to_string(&context).unwrap()).unwrap();
+        let ctx: Context = (*context).clone();
         let meta = json! ({"index":i,"size":size});
         let l: String = "map-".to_string() + map_id;
         ctx.insert_label(l, meta);
@@ -123,8 +122,6 @@ impl OutputProcessing for MapOutputProcessing {
 #[tokio::main]
 async fn main() -> MainResult<()> {
   node_rs::tracing::init();
-  let settings = Settings::new().unwrap();
-  info!("{:?}", settings);
 
   let graph = Graph {
     id: String::from("fact"),
@@ -192,8 +189,9 @@ async fn main() -> MainResult<()> {
     ],
   };
 
-  let (channel, channel_out) = create_rabbit_mq(&graph.id).await?;
-  let gi: GraphInternal = GraphInternal::new(graph.clone(), &channel, &channel_out);
+  let app = App::new(&graph.id).await;
+  info!("{:?}", app.settings);
+  let gi: GraphInternal = GraphInternal::new(graph.clone(), app.clone());
 
   #[tracing::instrument(level = "debug")]
   async fn map_action(
@@ -235,8 +233,7 @@ async fn main() -> MainResult<()> {
     context: Arc<Context>,
   ) -> (Option<JoinResult>, Arc<Context>) {
     debug!("join action {:?}", data);
-    let settings = Settings::new().unwrap();
-    let collection = db::get_collection(&settings).await.unwrap();
+    let collection = context.app.as_ref().unwrap().runs_collection.clone();
     let process = collection
       .find_one(
         doc! {"processId":context.process_id.clone()},
@@ -350,13 +347,7 @@ async fn main() -> MainResult<()> {
   .await;
 
   let init = VecFact { i: vec![3, 10, 5] };
-  start_process(
-    channel_out.clone(),
-    gi,
-    &init,
-    &Some(FlowContext::default()),
-  )
-  .await;
+  start_process(app, gi, &init, &Some(FlowContext::default())).await;
 
   loop {
     tokio::time::sleep(std::time::Duration::from_millis(1000)).await;

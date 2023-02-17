@@ -10,17 +10,17 @@ use mongodb::{
 };
 use node_rs::{db::get_graph_collection, settings::Settings};
 use serde_json::{json, to_string_pretty, Value};
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 pub async fn inspect(
   inspect_opts: &ChoregraphyInspectOptions,
   _opt: &Opts,
-  settings: &Settings,
+  settings: Arc<Settings>,
 ) -> Result<()> {
   let spin = ProgressBar::new_spinner();
   spin.enable_steady_tick(150);
   spin.set_message("Fetching chroregraphy");
-  let collection = get_graph_collection(settings)
+  let collection = get_graph_collection(&settings)
     .await
     .context("Accessing mongo")?;
 

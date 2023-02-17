@@ -1,34 +1,27 @@
 use crate::{
   graph::{Node, Relation},
-  settings::Settings,
+  App,
 };
-use mongodb::{
-  bson::{doc, Document},
-  options::FindOneOptions,
-  Collection,
-};
+use mongodb::{bson::doc, options::FindOneOptions};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 use tracing::{debug, span, Instrument};
 use yansi::Paint;
-lazy_static! {
-  static ref SETTINGS: Settings = Settings::new().unwrap();
-}
 
-#[tracing::instrument(level = "debug", skip(events_collection))]
+#[tracing::instrument(level = "debug", skip(app))]
 pub async fn fetch_parameter(
   process_id: &str,
   node: &Node,
   parameter: &mut Value,
   origin_map: &HashMap<String, Vec<Relation>>,
-  events_collection: &Collection<Document>,
+  app: Arc<App>,
 ) {
   for i in &node.input {
     if !&parameter[i].is_null() {
       continue;
     }
 
-    match origin_map.get(&(SETTINGS.rabbitmq.routing_key.clone() + "." + &node.id + "_" + i)) {
+    match origin_map.get(&(app.settings.rabbitmq.routing_key.clone() + "." + &node.id + "_" + i)) {
       None => {}
       Some(relation) => {
         let query_filter = doc! {"type": "updateOne",
@@ -42,7 +35,8 @@ pub async fn fetch_parameter(
           },};
         // TODO: filter more with inputMatching
 
-        let event_document = events_collection
+        let event_document = app
+          .events_collection
           .find_one(query_filter, FindOneOptions::default())
           .instrument(span!(tracing::Level::DEBUG, "mongo.find_one"))
           .await

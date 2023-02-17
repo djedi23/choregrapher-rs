@@ -18,7 +18,7 @@ use fs::{fs, FsOptions};
 use inject::inject;
 use node_rs::settings::Settings;
 use process::{process_options, ProcessOptions};
-use std::io;
+use std::{io, sync::Arc};
 
 /// Dancer -- an command interface for the choregrapher
 #[derive(Parser, Debug)]
@@ -163,11 +163,12 @@ async fn main() -> Result<()> {
   let settings: Settings = settings
     .try_deserialize()
     .context("Can't load configuration")?;
+  let settings = Arc::new(settings);
 
   // You can handle information about subcommands by requesting their matches by name
   // (as below), requesting just the name used, or both at the same time
   match &opts.subcmd {
-    SubCommand::Inject(injection) => inject(injection, &opts, &settings).await,
+    SubCommand::Inject(injection) => inject(injection, &opts, settings).await,
     SubCommand::Completions(completions) => {
       let mut app = Opts::into_app();
       eprintln!("Generating completion file for {:?}...", completions.choice);
@@ -179,9 +180,9 @@ async fn main() -> Result<()> {
         GeneratorChoice::Zsh => print_completions(Zsh, &mut app),
       }
     }
-    SubCommand::Choregraphy(options) => choregraphy_options(options, &opts, &settings).await,
-    SubCommand::Process(options) => process_options(options, &opts, &settings).await,
-    SubCommand::Fs(options) => fs(options, &opts, &settings).await,
+    SubCommand::Choregraphy(options) => choregraphy_options(options, &opts, settings).await,
+    SubCommand::Process(options) => process_options(options, &opts, settings).await,
+    SubCommand::Fs(options) => fs(options, &opts, settings).await,
   }
   // more program logic goes here...
 }

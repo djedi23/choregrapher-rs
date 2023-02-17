@@ -1,15 +1,14 @@
 use crate::{
   builder::GraphInternal,
   context::FlowContext,
-  db,
   flow_message::FlowMessage,
   graph::Node,
   rabbitmq::{send_message, FieldAccessor},
   routing::routing,
   settings::Settings,
+  App,
 };
 use chrono::Utc;
-use lapin::Channel;
 use mongodb::{
   bson::{doc, to_bson, Bson},
   options::{UpdateModifications, UpdateOptions},
@@ -22,10 +21,10 @@ use uuid::Uuid;
 /// Start a new choragrapher process.
 /// returns the process id.
 ///  partof: #SPC-run.startProcess
-#[instrument(skip(chan, graph))]
+#[instrument(skip(app, graph))]
 pub async fn start_process<T>(
-  chan: Arc<Channel>,
-  graph: GraphInternal<'_>,
+  app: Arc<App>,
+  graph: GraphInternal,
   init: &T,
   context: &Option<FlowContext>,
 ) -> String
@@ -45,7 +44,7 @@ where
       let parameter = init.get(output_field.clone().as_str()).unwrap();
 
       // partof: #SPC-run.initProcessInDB
-      let collection = db::get_collection(&settings).await.unwrap();
+      let collection = &app.runs_collection;
       collection
         .update_one(
           doc! {"processId":process_id.clone()},
@@ -74,7 +73,7 @@ where
         .await
         .unwrap();
 
-      let collection = db::get_events_collection(&settings).await.unwrap();
+      let collection = &app.events_collection;
       collection
         .insert_one(
           doc! {
@@ -116,6 +115,7 @@ where
     &graph.destination_map,
     &Node::id(settings.starting_node_id.clone()),
     init,
+    app.settings.clone(),
   ) {
     trace!("start process: route {:?}", &route);
     let payload = FlowMessage {
@@ -125,7 +125,7 @@ where
     };
 
     send_message(
-      chan.clone(),
+      app.clone(),
       &graph.id,
       &route.topic,
       serde_json::to_vec::<FlowMessage<&serde_json::Value>>(&payload).unwrap(),

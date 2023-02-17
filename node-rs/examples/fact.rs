@@ -5,9 +5,9 @@ use node_rs::{
   graph::{Graph, InputRef, Node, OutputRef, Relation},
   main_error::MainResult,
   output_processor::DefaultOutputProcessor,
-  rabbitmq::{create_rabbit_mq, FieldAccessor},
-  settings::Settings,
+  rabbitmq::FieldAccessor,
   start_process::start_process,
+  App,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -43,9 +43,6 @@ enum FactResult<T: Sub + Mul> {
 #[tokio::main]
 async fn main() -> MainResult<()> {
   node_rs::tracing::init();
-  let settings = Settings::new().unwrap();
-  info!("{:?}", settings);
-
   let graph = Graph {
     id: String::from("fact"),
     nodes: vec![Node {
@@ -78,8 +75,9 @@ async fn main() -> MainResult<()> {
     ],
   };
 
-  let (channel, channel_out) = create_rabbit_mq(&graph.id).await?;
-  let gi: GraphInternal = GraphInternal::new(graph.clone(), &channel, &channel_out);
+  let app = App::new(&graph.id).await;
+  info!("{:?}", app.settings);
+  let gi: GraphInternal = GraphInternal::new(graph.clone(), app.clone());
 
   #[tracing::instrument(level = "debug")]
   async fn fact_action(
@@ -104,7 +102,7 @@ async fn main() -> MainResult<()> {
   .await;
 
   let init = FactResult::O(Fact::N(20, 1));
-  start_process(channel_out.clone(), gi, &init, &None).await;
+  start_process(app, gi, &init, &None).await;
 
   loop {
     tokio::time::sleep(std::time::Duration::from_millis(1000)).await;

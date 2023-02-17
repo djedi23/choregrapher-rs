@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{choregraphy_inspect::inspect, choregraphy_ls::ls, choregraphy_process::process, Opts};
 use anyhow::Result;
 use clap::Parser;
@@ -61,7 +63,7 @@ pub struct ChoregraphyProcessOptions {
 pub(crate) async fn choregraphy_options(
   ch_opts: &ChoregraphyOptions,
   opts: &Opts,
-  settings: &Settings,
+  settings: Arc<Settings>,
 ) -> Result<()> {
   match &ch_opts.command {
     ChoregraphySubCommand::Ls => ls(opts, settings).await,

@@ -5,9 +5,9 @@ use node_rs::{
   graph::{Graph, InputRef, Node, OutputRef, Relation},
   main_error::MainResult,
   output_processor::DefaultOutputProcessor,
-  rabbitmq::{create_rabbit_mq, FieldAccessor},
-  settings::Settings,
+  rabbitmq::FieldAccessor,
   start_process::start_process,
+  App,
 };
 use serde::{Deserialize, Serialize};
 use std::{ops::Add, sync::Arc, time::Duration};
@@ -42,8 +42,6 @@ struct StartOutput<T: Add> {
 #[tokio::main]
 async fn main() -> MainResult<()> {
   node_rs::tracing::init();
-  let settings = Settings::new().unwrap();
-  info!("{:?}", settings);
 
   let graph = Graph {
     id: String::from("summer"),
@@ -111,9 +109,9 @@ async fn main() -> MainResult<()> {
     ],
   };
 
-  let (channel, channel_out) = create_rabbit_mq(&graph.id).await?;
-
-  let gi: GraphInternal = GraphInternal::new(graph.clone(), &channel, &channel_out);
+  let app = App::new(&graph.id).await;
+  info!("{:?}", app.settings);
+  let gi: GraphInternal = GraphInternal::new(graph.clone(), app.clone());
 
   #[tracing::instrument(level = "debug")]
   async fn sum_action(
@@ -160,7 +158,7 @@ async fn main() -> MainResult<()> {
   .await;
 
   let init = StartOutput { i1: 2, i2: 3 };
-  start_process(channel_out.clone(), gi, &init, &None).await;
+  start_process(app, gi, &init, &None).await;
 
   loop {
     tokio::time::sleep(Duration::from_millis(1000)).await;

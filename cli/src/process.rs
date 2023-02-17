@@ -8,7 +8,7 @@ use mongodb::{
   options::FindOptions,
 };
 use node_rs::{db::get_collection, flow_message::NodeOutput, settings::Settings};
-use std::fmt::Display;
+use std::{fmt::Display, sync::Arc};
 use tokio_stream::StreamExt;
 
 #[derive(Parser, Debug)]
@@ -62,7 +62,7 @@ pub struct ProcessOutputOptions {
 pub(crate) async fn process_options(
   pr_opts: &ProcessOptions,
   opts: &Opts,
-  settings: &Settings,
+  settings: Arc<Settings>,
 ) -> Result<()> {
   match &pr_opts.command {
     ProcessSubCommand::Output(options) => process_output(options, opts, settings).await,
@@ -117,12 +117,12 @@ impl Display for ProcessOutputDisplay {
 pub(crate) async fn process_output(
   out_opts: &ProcessOutputOptions,
   opts: &Opts,
-  settings: &Settings,
+  settings: Arc<Settings>,
 ) -> Result<()> {
   let spin = ProgressBar::new_spinner();
   spin.enable_steady_tick(150);
   spin.set_message("Fetching processes");
-  let collection = get_collection(settings).await.context("Accessing mongo")?;
+  let collection = get_collection(&settings).await.context("Accessing mongo")?;
   let projection = if out_opts.all {
     doc! {"outputs":1, "parameters":-1}
   } else {
@@ -155,7 +155,7 @@ pub(crate) async fn process_output(
           } else {
             serde_json::to_string_pretty(&output_doc[0].as_document().unwrap())?
           };
-          println!("{}", j);
+          println!("{j}");
         } else {
           for output_elt in output_doc {
             let output: NodeOutput<Bson> = from_document(output_elt.as_document().unwrap().clone())

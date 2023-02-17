@@ -1596,7 +1596,6 @@ dependencies = [
  "console-subscriber",
  "field_accessor_derive",
  "lapin",
- "lazy_static",
  "mongodb",
  "openssl",
  "opentelemetry",

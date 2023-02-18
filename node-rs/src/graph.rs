@@ -37,7 +37,7 @@ pub struct Graph {
 }
 
 // #SPC-graph.node
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Node {
   pub id: String,
   pub name: String,
@@ -61,13 +61,13 @@ pub struct InputRef {
   pub node: String,
   pub input: String,
 }
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct OutputRef {
   pub node: String,
   pub output: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Relation {
   pub from: OutputRef,
   pub to: InputRef,

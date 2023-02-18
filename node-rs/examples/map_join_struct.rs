@@ -9,10 +9,8 @@ use node_rs::{
   flow_message::PartialNodeOutput,
   graph::{Graph, InputRef, Node, OutputRef, Relation},
   main_error::MainResult,
-  node, nodes,
   output_processor::{DefaultOutputProcessor, OutputProcessing},
   rabbitmq::FieldAccessor,
-  relations,
   start_process::start_process,
   App,
 };
@@ -127,15 +125,67 @@ async fn main() -> MainResult<()> {
 
   let graph = Graph {
     id: String::from("fact"),
-    nodes: nodes![
-	((fact:Factorial) (i) -> (o,r)),
-	((map:Map)        (i) -> (i)),
-	((join:Join)      (i) -> (i))
+    nodes: vec![
+      Node {
+        id: "fact".to_string(),
+        name: String::from("Factorial"),
+        input: vec!["i".to_string()],
+        output: vec!["o".to_string(), "r".to_string()],
+      },
+      Node {
+        id: "map".to_string(),
+        name: String::from("Map"),
+        input: vec!["i".to_string()],
+        output: vec!["i".to_string()],
+      },
+      Node {
+        id: "join".to_string(),
+        name: String::from("Join"),
+        input: vec!["i".to_string()],
+        output: vec!["i".to_string()],
+      },
     ],
-    edges: relations![ start(i) -> (i)map,
-                       map(i)   -> (i)fact,
-                       fact(o)  -> (i)fact,
-                       fact(r)  -> (i)join
+    edges: vec![
+      Relation {
+        from: OutputRef {
+          node: "start".to_string(),
+          output: "i".to_string(),
+        },
+        to: InputRef {
+          node: "map".to_string(),
+          input: "i".to_string(),
+        },
+      },
+      Relation {
+        from: OutputRef {
+          node: "map".to_string(),
+          output: "i".to_string(),
+        },
+        to: InputRef {
+          node: "fact".to_string(),
+          input: "i".to_string(),
+        },
+      },
+      Relation {
+        from: OutputRef {
+          node: "fact".to_string(),
+          output: "o".to_string(),
+        },
+        to: InputRef {
+          node: "fact".to_string(),
+          input: "i".to_string(),
+        },
+      },
+      Relation {
+        from: OutputRef {
+          node: "fact".to_string(),
+          output: "r".to_string(),
+        },
+        to: InputRef {
+          node: "join".to_string(),
+          input: "i".to_string(),
+        },
+      },
     ],
   };
 

@@ -14,6 +14,7 @@ pub mod db;
 mod fetchparameter;
 pub mod flow_message;
 pub mod graph;
+pub mod macros;
 pub mod main_error;
 pub mod output_processor;
 mod process_output;

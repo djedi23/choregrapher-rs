@@ -4,10 +4,8 @@ use node_rs::{
   context::Context,
   graph::{Graph, InputRef, Node, OutputRef, Relation},
   main_error::MainResult,
-  node, nodes,
   output_processor::DefaultOutputProcessor,
   rabbitmq::FieldAccessor,
-  relations,
   start_process::start_process,
   App,
 };
@@ -47,15 +45,67 @@ async fn main() -> MainResult<()> {
 
   let graph = Graph {
     id: String::from("summer"),
-    nodes: nodes![
-	((sum:Sum)                (i1, i2) -> (o)),
-	((proxy:Proxy_integer)    (i)     -> (i)),
-	((proxy1:Proxy_integer_1) (i)     -> (i))
+    nodes: vec![
+      Node {
+        id: "sum".to_string(),
+        name: String::from("Sum"),
+        input: vec!["i1".to_string(), "i2".to_string()],
+        output: vec!["o".to_string()],
+      },
+      Node {
+        id: "proxy".to_string(),
+        name: "Proxy integer".to_string(),
+        input: vec!["i".to_string()],
+        output: vec!["i".to_string()],
+      },
+      Node {
+        id: "proxy1".to_string(),
+        name: "Proxy integer 1".to_string(),
+        input: vec!["i".to_string()],
+        output: vec!["i".to_string()],
+      },
     ],
-    edges: relations![ start(i1) -> (i)proxy,
-                       start(i2) -> (i)proxy1,
-                       proxy(i)  -> (i1)sum,
-                       proxy1(i) -> (i2)sum
+    edges: vec![
+      Relation {
+        from: OutputRef {
+          node: "start".to_string(),
+          output: "i1".to_string(),
+        },
+        to: InputRef {
+          node: "proxy".to_string(),
+          input: "i".to_string(),
+        },
+      },
+      Relation {
+        from: OutputRef {
+          node: "start".to_string(),
+          output: "i2".to_string(),
+        },
+        to: InputRef {
+          node: "proxy1".to_string(),
+          input: "i".to_string(),
+        },
+      },
+      Relation {
+        from: OutputRef {
+          node: "proxy".to_string(),
+          output: "i".to_string(),
+        },
+        to: InputRef {
+          node: "sum".to_string(),
+          input: "i1".to_string(),
+        },
+      },
+      Relation {
+        from: OutputRef {
+          node: "proxy1".to_string(),
+          output: "i".to_string(),
+        },
+        to: InputRef {
+          node: "sum".to_string(),
+          input: "i2".to_string(),
+        },
+      },
     ],
   };
 

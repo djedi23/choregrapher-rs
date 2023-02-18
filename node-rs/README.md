@@ -89,33 +89,9 @@ The nodes declare the inputs and the outputs. The relations declare the links fr
 ``` rust
 let graph = Graph {
   id: String::from("fact"),
-  nodes: vec![Node {
-    id: "fact".to_string(),
-    name: String::from("Factorial"),
-    input: vec!["i".to_string()],
-    output: vec!["o".to_string(), "r".to_string()],
-  }],
-  edges: vec![
-    Relation {
-      from: OutputRef {
-        node: "start".to_string(),
-        output: "o".to_string(),
-      },
-      to: InputRef {
-        node: "fact".to_string(),
-        input: "i".to_string(),
-      },
-    },
-    Relation {
-      from: OutputRef {
-        node: "fact".to_string(),
-        output: "o".to_string(),
-      },
-      to: InputRef {
-        node: "fact".to_string(),
-        input: "i".to_string(),
-      },
-    },
+  nodes: nodes![(fact(i) -> (o, r))],
+  edges: relations![ start(o)-> (i)fact,
+                     fact(o) -> (i)fact
   ],
 };
 ```

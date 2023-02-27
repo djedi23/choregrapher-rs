@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
   collections::HashMap,
+  fmt::Debug,
   sync::{Arc, Mutex},
 };
 
@@ -28,7 +29,7 @@ impl Default for FlowContext {
 
 /// The context used by the node's action.
 /// It contains some metadata and some shared variables
-#[derive(Debug, Clone, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct Context {
   pub process_id: String,
   pub relation: Relation,
@@ -38,6 +39,16 @@ pub struct Context {
   // It's an option to be able to test the Context without settings up a real mongo and rabbmitmq
   #[serde(skip)]
   pub app: Option<Arc<App>>,
+}
+
+impl Debug for Context {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("Context")
+      .field("process_id", &self.process_id)
+      .field("relation", &self.relation)
+      .field("context", &self.context)
+      .finish()
+  }
 }
 
 impl Context {

@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use field_accessor_derive::FieldAccessor;
 use node_rs::{
   builder::GraphInternal,
@@ -7,7 +8,7 @@ use node_rs::{
   output_processor::DefaultOutputProcessor,
   rabbitmq::FieldAccessor,
   start_process::start_process,
-  App,
+  App, NodeAction,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -38,6 +39,31 @@ enum FactResult<T: Sub + Mul> {
   O(Fact<T>),
   #[serde(rename = "r")]
   R(T),
+}
+
+#[derive(Debug)]
+struct FactAction;
+#[async_trait]
+impl NodeAction for FactAction {
+  type INPUT = FactInput<u64>;
+  type OUTPUT = FactResult<u64>;
+
+  #[tracing::instrument(name = "Fact action", level = "debug")]
+  async fn action(
+    &self,
+    input: Self::INPUT,
+    context: Arc<Context>,
+  ) -> (Option<Self::OUTPUT>, Arc<Context>) {
+    debug!("fact action {:?}", Paint::blue(&input));
+    match input.i {
+      Fact::N(1, r) => {
+        info!("Fact: {:?}", Paint::green(&r).bold());
+        (Some(FactResult::R(r)), context)
+      }
+      Fact::N(n, r) => (Some(FactResult::O(Fact::N(n - 1, r * n))), context),
+      //      Fact::Fact(_) => (None, _context),
+    }
+  }
 }
 
 #[tokio::main]
@@ -79,24 +105,9 @@ async fn main() -> MainResult<()> {
   info!("{:?}", app.settings);
   let gi: GraphInternal = GraphInternal::new(graph.clone(), app.clone());
 
-  #[tracing::instrument(level = "debug")]
-  async fn fact_action(
-    data: FactInput<u64>,
-    _context: Arc<Context>,
-  ) -> (Option<FactResult<u64>>, Arc<Context>) {
-    debug!("fact action {:?}", Paint::blue(&data));
-    match data.i {
-      Fact::N(1, r) => {
-        info!("Fact: {:?}", Paint::green(&r).bold());
-        (Some(FactResult::R(r)), _context)
-      }
-      Fact::N(n, r) => (Some(FactResult::O(Fact::N(n - 1, r * n))), _context),
-      //      Fact::Fact(_) => (None, _context),
-    }
-  }
   gi.register_node_action(
     "fact",
-    fact_action,
+    Arc::new(FactAction),
     None::<Arc<DefaultOutputProcessor<FactResult<u64>, FactResult<u64>>>>,
   )
   .await;

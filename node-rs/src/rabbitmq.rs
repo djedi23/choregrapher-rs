@@ -6,7 +6,7 @@ use crate::{
   output_processor::OutputProcessing,
   process_output::process_output,
   settings::Settings,
-  App,
+  App, NodeAction,
 };
 use lapin::{
   message::DeliveryResult,
@@ -19,7 +19,7 @@ use lapin::{
   BasicProperties, Channel, Connection, ConnectionProperties, Error, ExchangeKind,
 };
 use serde::{de::DeserializeOwned, Serialize};
-use std::{collections::HashMap, fmt::Debug, future::Future, sync::Arc};
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 use tracing::{debug, info, instrument, span, trace, Instrument};
 
 pub trait FieldAccessor {
@@ -76,29 +76,27 @@ pub async fn create_rabbit_mq(
 
 #[rustfmt::skip::macros(doc)]
 #[allow(clippy::too_many_arguments)]
-pub async fn create_consumer<'de, Action, T, R, O, F>(
+pub async fn create_consumer<'de, I, R, O>(
   app: Arc<App>,
   destination_map: Arc<HashMap<String, Vec<InputRef>>>,
   origin_map: Arc<HashMap<String, Vec<Relation>>>,
-  graph_id: &str,
+  graph_id: String,
   node: Arc<Node>,
-  action: Action,
+  action: Arc<dyn NodeAction<INPUT = I, OUTPUT = R>>,
   output_processor: Arc<
     impl OutputProcessing<INPUT = R, OUTPUT = O> + ?Sized + Sync + Send + 'static,
   >,
 ) where
-  T: Debug + DeserializeOwned + Send,
-  R: Debug + Serialize + FieldAccessor + Clone + Send + Sync,
+  I: Debug + DeserializeOwned + Send + 'static,
+  R: Debug + Serialize + FieldAccessor + Clone + Send + Sync + 'static,
   O: Debug + Serialize + FieldAccessor + Clone + Send + Sync,
-  F: Future<Output = (Option<R>, Arc<Context>)> + Send,
-  Action: Fn(T, Arc<Context>) -> F + 'static + Sync + Send + Clone + Copy,
 {
   let queue_declare_options = QueueDeclareOptions {
     durable: true,
     ..Default::default()
   };
   let queue_name = app.settings.rabbitmq.queue_name.clone() + "_" + &node.id;
-  let exchange_name = (app.settings.rabbitmq.exchange_name.to_owned()) + "_" + graph_id;
+  let exchange_name = (app.settings.rabbitmq.exchange_name.to_owned()) + "_" + &graph_id;
   // partof: #SPC-rabbitmq #SPC-rabbitmq.nodeHaveQueue
   app
     .channel
@@ -145,6 +143,7 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
     let destination_map = destination_map.clone();
     let output_processor = output_processor.clone();
     let handle = handle.clone();
+    let action = action.clone();
     let app = app.clone();
 
     async move {
@@ -202,11 +201,12 @@ pub async fn create_consumer<'de, Action, T, R, O, F>(
           };
 
           // partof: #SPC-processing.callAction
-          let (result, context): (Option<R>, Arc<Context>) = action(
-            serde_json::from_value::<T>(data.parameter).unwrap(),
-            Arc::new(context),
-          )
-          .await;
+          let (result, context): (Option<R>, Arc<Context>) = action
+            .action(
+              serde_json::from_value::<I>(data.parameter).unwrap(),
+              Arc::new(context),
+            )
+            .await;
 
           process_output(
             result,

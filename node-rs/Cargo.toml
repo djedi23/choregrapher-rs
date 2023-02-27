@@ -18,7 +18,7 @@ chrono = {version="^0.4", features = ["serde"]}
 uuid = { version = "0.8", features = ["serde", "v4"] }
 yansi = "0.5.0"
 openssl = { version = "0.10", features = ["vendored"] }
-tokio = { version = "1.24", features = ["full", "tracing"] } # dev
+tokio = { version = "1.24", features = ["full"] } # dev
 tokio-executor-trait = "2.1"
 tokio-reactor-trait = "1.1"
 tracing = "0.1"
@@ -28,6 +28,7 @@ tracing-forest = { version = "0.1", features = ["full"], optional=true }
 opentelemetry = { version = "0.18", features = ["rt-tokio"], optional=true }
 tracing-opentelemetry = { version = "0.18", optional=true }
 opentelemetry-jaeger = { version = "0.17", features = ["rt-tokio", "tokio"], optional=true }
+async-trait = "0.1"
 
 [features]
 default=["forest"]

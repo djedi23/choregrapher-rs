@@ -2,7 +2,9 @@
 //!
 //! `node-rs`
 
-use crate::db::get_graph_collection;
+use async_trait::async_trait;
+use context::Context;
+use db::get_graph_collection;
 use lapin::Channel;
 use mongodb::{bson::Document, Collection};
 use settings::Settings;
@@ -56,4 +58,24 @@ impl App {
       channel_out,
     })
   }
+}
+
+/// Represents an action a node can perform.
+#[async_trait]
+pub trait NodeAction: Sync + Send {
+  /// The input type of this node.
+  /// When the app receive an input, it will deserialize the message into this type.
+  /// So, each field of the struct should match an input name declared in the node.
+  type INPUT;
+  /// The output type of the node.
+  /// This type fields/variant should match the outputs declared in the node.
+  type OUTPUT;
+  /// Action to perform when a node receive a new input.
+  /// * **input** the input just received.
+  /// * **context** the execution context. This function can modify the context and return it.
+  async fn action(
+    &self,
+    input: Self::INPUT,
+    context: Arc<Context>,
+  ) -> (Option<Self::OUTPUT>, Arc<Context>);
 }

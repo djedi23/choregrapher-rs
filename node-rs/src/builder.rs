@@ -1,15 +1,14 @@
 //! # Choragraphy builder
 //!
 use crate::{
-  context::Context,
   graph::{Graph, InputRef, Node, Relation},
   output_processor::{DefaultOutputProcessor, OutputProcessing},
   rabbitmq::{create_consumer, FieldAccessor},
   settings::Settings,
-  App,
+  App, NodeAction,
 };
 use serde::{de::DeserializeOwned, Serialize};
-use std::{collections::HashMap, fmt::Debug, future::Future, sync::Arc};
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 use tracing::instrument;
 
 /// Hold the internal information to process a graph
@@ -90,24 +89,20 @@ impl GraphInternal {
 
   #[instrument(level = "trace", skip(self, action, output_processor))]
   pub async fn register_node_action<
-    T,
+    I: 'static + Send,
     R: 'static + Send + Sync,
-    O: 'static + Sync + Send,
-    Action,
-    F,
+    O: 'static + Send + Sync,
   >(
     &self,
     node_id: &str,
-    action: Action,
+    action: Arc<dyn NodeAction<INPUT = I, OUTPUT = R>>,
     output_processor: Option<
       Arc<impl OutputProcessing<INPUT = R, OUTPUT = O> + 'static + Send + Sync>,
     >,
   ) where
-    T: Debug + DeserializeOwned + Send,
+    I: Debug + DeserializeOwned,
     R: Debug + Serialize + FieldAccessor + Clone,
     O: Debug + Serialize + FieldAccessor + Clone + From<R>,
-    F: Future<Output = (Option<R>, Arc<Context>)> + Send,
-    Action: Fn(T, Arc<Context>) -> F + 'static + Sync + Send + Clone + Copy,
   {
     let node = self.node(node_id);
     if let Some(node) = node {
@@ -121,7 +116,7 @@ impl GraphInternal {
         self.app.clone(),
         self.destination_map.clone(),
         self.origin_map.clone(),
-        &self.id,
+        self.id.clone(),
         node.clone(),
         action,
         op,

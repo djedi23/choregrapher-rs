@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use field_accessor_derive::FieldAccessor;
 use mongodb::{
   bson::{doc, from_bson, Bson, Document},
@@ -12,7 +13,7 @@ use node_rs::{
   output_processor::{DefaultOutputProcessor, OutputProcessing},
   rabbitmq::FieldAccessor,
   start_process::start_process,
-  App,
+  App, NodeAction,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -47,6 +48,31 @@ enum FactResult<T: Sub + Mul> {
   R(T),
 }
 
+#[derive(Debug)]
+struct FactAction;
+#[async_trait]
+impl NodeAction for FactAction {
+  type INPUT = FactInput<u64>;
+  type OUTPUT = FactResult<u64>;
+
+  #[tracing::instrument(name = "Fact Action", level = "debug")]
+  async fn action(
+    &self,
+    input: Self::INPUT,
+    context: Arc<Context>,
+  ) -> (Option<Self::OUTPUT>, Arc<Context>) {
+    debug!("fact action {:?}", input);
+    match input.i {
+      Fact::N(1, r) => {
+        info!("Fact: {:?}", r);
+        (Some(FactResult::R(r)), context)
+      }
+      Fact::N(n, r) => (Some(FactResult::O(Fact::N(n - 1, r * n))), context),
+      Fact::Fact(_) => (None, context),
+    }
+  }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, FieldAccessor)]
 struct VecFact<T: Sub + Mul> {
   i: Vec<T>,
@@ -60,6 +86,23 @@ impl From<VecFact<u64>> for FactInput<u64> {
   }
 }
 
+#[derive(Debug)]
+struct MapAction;
+#[async_trait]
+impl NodeAction for MapAction {
+  type INPUT = VecFact<u64>;
+  type OUTPUT = VecFact<u64>;
+  #[tracing::instrument(name = "Map Action", level = "debug")]
+  async fn action(
+    &self,
+    input: Self::INPUT,
+    context: Arc<Context>,
+  ) -> (Option<Self::OUTPUT>, Arc<Context>) {
+    debug!("map action {:?}", input);
+    (Some(input), context)
+  }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, FieldAccessor)]
 struct JoinInput<T: Sub + Mul> {
   i: T,
@@ -68,6 +111,128 @@ struct JoinInput<T: Sub + Mul> {
 #[derive(Serialize, Deserialize, Debug, Clone, FieldAccessor)]
 struct JoinResult {
   i: Bson,
+}
+
+#[derive(Debug)]
+struct JoinAction;
+#[async_trait]
+impl NodeAction for JoinAction {
+  type INPUT = JoinInput<u64>;
+  type OUTPUT = JoinResult;
+
+  #[tracing::instrument(name = "Join Action", level = "debug")]
+  async fn action(
+    &self,
+    input: Self::INPUT,
+    context: Arc<Context>,
+  ) -> (Option<Self::OUTPUT>, Arc<Context>) {
+    debug!("join action {:?}", input);
+    let collection = context.app.as_ref().unwrap().runs_collection.clone();
+    let process = collection
+      .find_one(
+        doc! {"processId":context.process_id.clone()},
+        FindOneOptions::default(),
+      )
+      .instrument(span!(tracing::Level::DEBUG, "mongo.find_one"))
+      .await
+      .unwrap() // result
+      .unwrap(); // Option
+    if let Some(mapvec) = context.get_label("maps".into()) {
+      let mapvec: Vec<String> = serde_json::from_value(mapvec).unwrap();
+      let map_id = &mapvec[mapvec.len() - 1];
+      let inputs = process
+        .get_array("outputs")
+        .unwrap()
+        .iter()
+        .filter(|&o| {
+          let node_output: PartialNodeOutput = from_bson(o.clone()).unwrap();
+          // TS:     if (o.output.node !== from.node || o.output.output !== from.output) return false;
+          if node_output.output.node != context.relation.from.node
+            || node_output.output.output != context.relation.from.output
+          {
+            return false;
+          }
+
+          if let Ok(context) = o.as_document().unwrap().get_document("context") {
+            if let Ok(labels) = context.get_document("labels") {
+              if let Ok(maps) = labels.get_array("maps") {
+                // o.context?.labels?.maps
+                return maps.iter().any(|map| {
+                  // maps.contains(mapId)
+                  if let Bson::String(string) = map {
+                    string == map_id
+                  } else {
+                    false
+                  }
+                });
+              }
+            }
+          }
+          false
+        })
+        .collect::<Bson>();
+
+      let map_label = "map-".to_string() + map_id;
+      if let Some(labels) = context.get_label(map_label.clone()) {
+        // labels[mapLabel].size
+        let map_size = labels
+          .as_object()
+          .unwrap()
+          .get("size")
+          .unwrap()
+          .as_u64()
+          .unwrap();
+        if map_size as usize == inputs.as_array().unwrap().len() {
+          // Here we can process the join.
+          let mut filter_query: Document = doc! {"processId":context.process_id.clone()};
+          let join_key: String = "join-".to_string() + map_id;
+          filter_query.insert(&join_key, doc! {"$exists":false});
+          let mut update_query: Document = Document::new();
+          update_query.insert(&join_key, 1); // seal the join in case of concurent join.
+          collection
+            .find_one_and_update(
+              filter_query,
+              doc! {"$set":  update_query},
+              FindOneAndUpdateOptions::default(),
+            )
+            .instrument(span!(tracing::Level::DEBUG, "mongo.find_one_and_update"))
+            .await
+            .unwrap_or_default()
+            .unwrap_or_default(); // TS:  if (result.value !== null)
+          let mut im = inputs.as_array().unwrap().clone();
+          let map_label_cloned = &map_label.clone();
+          im.sort_by_cached_key(|i| -> i64 {
+            i.as_document()
+              .unwrap()
+              .get_document("context")
+              .unwrap()
+              .get_document("labels")
+              .unwrap()
+              .get_document(map_label_cloned)
+              .unwrap()
+              .get("index")
+              .unwrap()
+              .as_i64()
+              .unwrap()
+          });
+          let output_array = im
+            .iter()
+            .map(|i| i.as_document().unwrap().get("parameter").unwrap())
+            .collect::<Bson>();
+          context.remove_label(map_label);
+          if let Some(mut mapvec) = context.get_label("maps".into()) {
+            if let Value::Array(ref mut maps) = mapvec {
+              maps.remove(0);
+            }
+            context.insert_label("maps".into(), mapvec);
+            info!("Join: {}", output_array);
+            return (Some(JoinResult { i: output_array }), context);
+          }
+        }
+      }
+    }
+    (None, context)
+  }
 }
 
 struct MapOutputProcessing;
@@ -193,155 +358,23 @@ async fn main() -> MainResult<()> {
   info!("{:?}", app.settings);
   let gi: GraphInternal = GraphInternal::new(graph.clone(), app.clone());
 
-  #[tracing::instrument(level = "debug")]
-  async fn map_action(
-    data: VecFact<u64>,
-    context: Arc<Context>,
-  ) -> (Option<VecFact<u64>>, Arc<Context>) {
-    debug!("map action {:?}", data);
-    (Some(data), context)
-  }
+  gi.register_node_action(
+    "map",
+    Arc::new(MapAction),
+    Some(Arc::new(MapOutputProcessing)),
+  )
+  .await;
 
-  gi.register_node_action("map", map_action, Some(Arc::new(MapOutputProcessing)))
-    .await;
-
-  #[tracing::instrument(level = "debug")]
-  async fn fact_action(
-    data: FactInput<u64>,
-    context: Arc<Context>,
-  ) -> (Option<FactResult<u64>>, Arc<Context>) {
-    debug!("fact action {:?}", data);
-    match data.i {
-      Fact::N(1, r) => {
-        info!("Fact: {:?}", r);
-        (Some(FactResult::R(r)), context)
-      }
-      Fact::N(n, r) => (Some(FactResult::O(Fact::N(n - 1, r * n))), context),
-      Fact::Fact(_) => (None, context),
-    }
-  }
   gi.register_node_action(
     "fact",
-    fact_action,
+    Arc::new(FactAction),
     None::<Arc<DefaultOutputProcessor<FactResult<u64>, FactResult<u64>>>>,
   )
   .await;
 
-  #[tracing::instrument(level = "debug")]
-  async fn join_function(
-    data: JoinInput<u64>,
-    context: Arc<Context>,
-  ) -> (Option<JoinResult>, Arc<Context>) {
-    debug!("join action {:?}", data);
-    let collection = context.app.as_ref().unwrap().runs_collection.clone();
-    let process = collection
-      .find_one(
-        doc! {"processId":context.process_id.clone()},
-        FindOneOptions::default(),
-      )
-      .instrument(span!(tracing::Level::DEBUG, "mongo.find_one"))
-      .await
-      .unwrap() // result
-      .unwrap(); // Option
-    if let Some(mapvec) = context.get_label("maps".into()) {
-      let mapvec: Vec<String> = serde_json::from_value(mapvec).unwrap();
-      let map_id = &mapvec[mapvec.len() - 1];
-      let inputs = process
-        .get_array("outputs")
-        .unwrap()
-        .iter()
-        .filter(|&o| {
-          let node_output: PartialNodeOutput = from_bson(o.clone()).unwrap();
-          // TS:     if (o.output.node !== from.node || o.output.output !== from.output) return false;
-          if node_output.output.node != context.relation.from.node
-            || node_output.output.output != context.relation.from.output
-          {
-            return false;
-          }
-
-          if let Ok(context) = o.as_document().unwrap().get_document("context") {
-            if let Ok(labels) = context.get_document("labels") {
-              if let Ok(maps) = labels.get_array("maps") {
-                // o.context?.labels?.maps
-                return maps.iter().any(|map| {
-                  // maps.contains(mapId)
-                  if let Bson::String(string) = map {
-                    string == map_id
-                  } else {
-                    false
-                  }
-                });
-              }
-            }
-          }
-          false
-        })
-        .collect::<Bson>();
-
-      let map_label = "map-".to_string() + map_id;
-      if let Some(labels) = context.get_label(map_label.clone()) {
-        // labels[mapLabel].size
-        let map_size = labels
-          .as_object()
-          .unwrap()
-          .get("size")
-          .unwrap()
-          .as_u64()
-          .unwrap();
-        if map_size as usize == inputs.as_array().unwrap().len() {
-          // Here we can process the join.
-          let mut filter_query: Document = doc! {"processId":context.process_id.clone()};
-          let join_key: String = "join-".to_string() + map_id;
-          filter_query.insert(&join_key, doc! {"$exists":false});
-          let mut update_query: Document = Document::new();
-          update_query.insert(&join_key, 1); // seal the join in case of concurent join.
-          collection
-            .find_one_and_update(
-              filter_query,
-              doc! {"$set":  update_query},
-              FindOneAndUpdateOptions::default(),
-            )
-            .instrument(span!(tracing::Level::DEBUG, "mongo.find_one_and_update"))
-            .await
-            .unwrap_or_default()
-            .unwrap_or_default(); // TS:  if (result.value !== null)
-          let mut im = inputs.as_array().unwrap().clone();
-          let map_label_cloned = &map_label.clone();
-          im.sort_by_cached_key(|i| -> i64 {
-            i.as_document()
-              .unwrap()
-              .get_document("context")
-              .unwrap()
-              .get_document("labels")
-              .unwrap()
-              .get_document(map_label_cloned)
-              .unwrap()
-              .get("index")
-              .unwrap()
-              .as_i64()
-              .unwrap()
-          });
-          let output_array = im
-            .iter()
-            .map(|i| i.as_document().unwrap().get("parameter").unwrap())
-            .collect::<Bson>();
-          context.remove_label(map_label);
-          if let Some(mut mapvec) = context.get_label("maps".into()) {
-            if let Value::Array(ref mut maps) = mapvec {
-              maps.remove(0);
-            }
-            context.insert_label("maps".into(), mapvec);
-            info!("Join: {}", output_array);
-            return (Some(JoinResult { i: output_array }), context);
-          }
-        }
-      }
-    }
-    (None, context)
-  }
   gi.register_node_action(
     "join",
-    join_function,
+    Arc::new(JoinAction),
     None::<Arc<DefaultOutputProcessor<JoinResult, JoinResult>>>,
   )
   .await;

@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use field_accessor_derive::FieldAccessor;
 use mongodb::{
   bson::{doc, from_bson, Bson, Document},
@@ -14,7 +15,7 @@ use node_rs::{
   rabbitmq::FieldAccessor,
   relations,
   start_process::start_process,
-  App,
+  App, NodeAction,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -49,6 +50,31 @@ enum FactResult<T: Sub + Mul> {
   R(T),
 }
 
+#[derive(Debug)]
+struct FactAction;
+#[async_trait]
+impl NodeAction for FactAction {
+  type INPUT = FactInput<u64>;
+  type OUTPUT = FactResult<u64>;
+
+  #[tracing::instrument(name = "Fact Action", level = "debug")]
+  async fn action(
+    &self,
+    input: Self::INPUT,
+    context: Arc<Context>,
+  ) -> (Option<Self::OUTPUT>, Arc<Context>) {
+    debug!("fact action {:?}", input);
+    match input.i {
+      Fact::N(1, r) => {
+        info!("Fact: {:?}", r);
+        (Some(FactResult::R(r)), context)
+      }
+      Fact::N(n, r) => (Some(FactResult::O(Fact::N(n - 1, r * n))), context),
+      Fact::Fact(_) => (None, context),
+    }
+  }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, FieldAccessor)]
 struct VecFact<T: Sub + Mul> {
   i: Vec<T>,
@@ -62,6 +88,23 @@ impl From<VecFact<u64>> for FactInput<u64> {
   }
 }
 
+#[derive(Debug)]
+struct MapAction;
+#[async_trait]
+impl NodeAction for MapAction {
+  type INPUT = VecFact<u64>;
+  type OUTPUT = VecFact<u64>;
+  #[tracing::instrument(name = "Map Action", level = "debug")]
+  async fn action(
+    &self,
+    input: Self::INPUT,
+    context: Arc<Context>,
+  ) -> (Option<Self::OUTPUT>, Arc<Context>) {
+    debug!("map action {:?}", input);
+    (Some(input), context)
+  }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, FieldAccessor)]
 struct JoinInput<T: Sub + Mul> {
   i: T,
@@ -72,117 +115,20 @@ struct JoinResult {
   i: Bson,
 }
 
-struct MapOutputProcessing;
+#[derive(Debug)]
+struct JoinAction;
+#[async_trait]
+impl NodeAction for JoinAction {
+  type INPUT = JoinInput<u64>;
+  type OUTPUT = JoinResult;
 
-impl OutputProcessing for MapOutputProcessing {
-  type INPUT = VecFact<u64>;
-  type OUTPUT = FactInput<u64>;
-
-  #[tracing::instrument(level = "debug", skip_all)]
-  fn process(&self, out: Self::INPUT, context: Arc<Context>) -> Vec<(Self::OUTPUT, Arc<Context>)> {
-    let map_id = &Uuid::new_v4().to_string();
-    match context.get_label("maps".into()) {
-      None => {
-        context.insert_label("maps".into(), json!([map_id]));
-      }
-      Some(maps) => {
-        if let Value::Array(mut maps) = maps {
-          maps.insert(0, json!(map_id));
-        }
-      }
-    };
-
-    trace!(
-      "{:?}:{:?}",
-      Paint::red(&map_id),
-      context.get_label("maps".into())
-    );
-
-    let size = out.i.len();
-
-    out
-      .i
-      .into_iter()
-      .enumerate()
-      .map(|(i, o)| {
-        let ctx: Context = (*context).clone();
-        let meta = json! ({"index":i,"size":size});
-        let l: String = "map-".to_string() + map_id;
-        ctx.insert_label(l, meta);
-        trace!(
-          "ctx after op {:?} {:?} {:?}",
-          i,
-          Paint::cyan(&ctx),
-          Paint::red(&context)
-        );
-        (FactInput { i: Fact::N(o, 1) }, Arc::new(ctx))
-      })
-      .collect()
-  }
-}
-
-#[tokio::main]
-async fn main() -> MainResult<()> {
-  node_rs::tracing::init();
-
-  let graph = Graph {
-    id: String::from("fact"),
-    nodes: nodes![
-	((fact:Factorial) (i) -> (o,r)),
-	((map:Map)        (i) -> (i)),
-	((join:Join)      (i) -> (i))
-    ],
-    edges: relations![ start(i) -> (i)map,
-                       map(i)   -> (i)fact,
-                       fact(o)  -> (i)fact,
-                       fact(r)  -> (i)join
-    ],
-  };
-
-  let app = App::new(&graph.id).await;
-  info!("{:?}", app.settings);
-  let gi: GraphInternal = GraphInternal::new(graph.clone(), app.clone());
-
-  #[tracing::instrument(level = "debug")]
-  async fn map_action(
-    data: VecFact<u64>,
+  #[tracing::instrument(name = "Join Action", level = "debug")]
+  async fn action(
+    &self,
+    input: Self::INPUT,
     context: Arc<Context>,
-  ) -> (Option<VecFact<u64>>, Arc<Context>) {
-    debug!("map action {:?}", data);
-    (Some(data), context)
-  }
-
-  gi.register_node_action("map", map_action, Some(Arc::new(MapOutputProcessing)))
-    .await;
-
-  #[tracing::instrument(level = "debug")]
-  async fn fact_action(
-    data: FactInput<u64>,
-    context: Arc<Context>,
-  ) -> (Option<FactResult<u64>>, Arc<Context>) {
-    debug!("fact action {:?}", data);
-    match data.i {
-      Fact::N(1, r) => {
-        info!("Fact: {:?}", r);
-        (Some(FactResult::R(r)), context)
-      }
-      Fact::N(n, r) => (Some(FactResult::O(Fact::N(n - 1, r * n))), context),
-      Fact::Fact(_) => (None, context),
-    }
-  }
-  gi.register_node_action(
-    "fact",
-    fact_action,
-    None::<Arc<DefaultOutputProcessor<FactResult<u64>, FactResult<u64>>>>,
-  )
-  .await;
-
-  #[tracing::instrument(level = "debug")]
-  async fn join_function(
-    data: JoinInput<u64>,
-    context: Arc<Context>,
-  ) -> (Option<JoinResult>, Arc<Context>) {
-    debug!("join action {:?}", data);
+  ) -> (Option<Self::OUTPUT>, Arc<Context>) {
+    debug!("join action {:?}", input);
     let collection = context.app.as_ref().unwrap().runs_collection.clone();
     let process = collection
       .find_one(
@@ -289,9 +235,96 @@ async fn main() -> MainResult<()> {
     }
     (None, context)
   }
+}
+
+struct MapOutputProcessing;
+
+impl OutputProcessing for MapOutputProcessing {
+  type INPUT = VecFact<u64>;
+  type OUTPUT = FactInput<u64>;
+
+  #[tracing::instrument(level = "debug", skip_all)]
+  fn process(&self, out: Self::INPUT, context: Arc<Context>) -> Vec<(Self::OUTPUT, Arc<Context>)> {
+    let map_id = &Uuid::new_v4().to_string();
+    match context.get_label("maps".into()) {
+      None => {
+        context.insert_label("maps".into(), json!([map_id]));
+      }
+      Some(maps) => {
+        if let Value::Array(mut maps) = maps {
+          maps.insert(0, json!(map_id));
+        }
+      }
+    };
+
+    trace!(
+      "{:?}:{:?}",
+      Paint::red(&map_id),
+      context.get_label("maps".into())
+    );
+
+    let size = out.i.len();
+
+    out
+      .i
+      .into_iter()
+      .enumerate()
+      .map(|(i, o)| {
+        let ctx: Context = (*context).clone();
+        let meta = json! ({"index":i,"size":size});
+        let l: String = "map-".to_string() + map_id;
+        ctx.insert_label(l, meta);
+        trace!(
+          "ctx after op {:?} {:?} {:?}",
+          i,
+          Paint::cyan(&ctx),
+          Paint::red(&context)
+        );
+        (FactInput { i: Fact::N(o, 1) }, Arc::new(ctx))
+      })
+      .collect()
+  }
+}
+
+#[tokio::main]
+async fn main() -> MainResult<()> {
+  node_rs::tracing::init();
+
+  let graph = Graph {
+    id: String::from("fact"),
+    nodes: nodes![
+	((fact:Factorial) (i) -> (o,r)),
+	((map:Map)        (i) -> (i)),
+	((join:Join)      (i) -> (i))
+    ],
+    edges: relations![ start(i) -> (i)map,
+                       map(i)   -> (i)fact,
+                       fact(o)  -> (i)fact,
+                       fact(r)  -> (i)join
+    ],
+  };
+
+  let app = App::new(&graph.id).await;
+  info!("{:?}", app.settings);
+  let gi: GraphInternal = GraphInternal::new(graph.clone(), app.clone());
+
+  gi.register_node_action(
+    "map",
+    Arc::new(MapAction),
+    Some(Arc::new(MapOutputProcessing)),
+  )
+  .await;
+
+  gi.register_node_action(
+    "fact",
+    Arc::new(FactAction),
+    None::<Arc<DefaultOutputProcessor<FactResult<u64>, FactResult<u64>>>>,
+  )
+  .await;
+
   gi.register_node_action(
     "join",
-    join_function,
+    Arc::new(JoinAction),
     None::<Arc<DefaultOutputProcessor<JoinResult, JoinResult>>>,
   )
   .await;

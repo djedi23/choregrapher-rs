@@ -63,20 +63,29 @@ enum FactResult<T: Sub + Mul> {
 }
 ```
 
-Now, we can create the factorial function:
-
+Now, we can create the factorial action. Actions are implementations of the NodeAction trait:
 ``` rust
-async fn fact_action(
-  data: FactInput<u64>,
-  _context: Rc<Context>,
-) -> (Option<FactResult<u64>>, Rc<Context>) {
-  debug!("fact action {:?}", data);
-  match data.i {
-    Fact::N(1, r) => {
-      info!("Fact: {:?}", r);
-      (Some(FactResult::R(r)), _context)
+#[derive(Debug)]
+struct FactAction;
+#[async_trait]
+impl NodeAction for FactAction {
+  type INPUT = FactInput<u64>;
+  type OUTPUT = FactResult<u64>;
+
+  #[tracing::instrument(name = "Fact action", level = "debug")]
+  async fn action(
+    &self,
+    input: Self::INPUT,
+    context: Arc<Context>,
+  ) -> (Option<Self::OUTPUT>, Arc<Context>) {
+    debug!("fact action {:?}", Paint::blue(&input));
+    match input.i {
+      Fact::N(1, r) => {
+        info!("Fact: {:?}", Paint::green(&r).bold());
+        (Some(FactResult::R(r)), context)
+      }
+      Fact::N(n, r) => (Some(FactResult::O(Fact::N(n - 1, r * n))), context),
     }
-    Fact::N(n, r) => (Some(FactResult::O(Fact::N(n - 1, r * n))), _context),
   }
 }
 ```
@@ -100,7 +109,7 @@ Finaly, let's associate the graph and the function in the system. After this lin
 ```rust
     graph.register_node_action(
       "fact",
-      fact_action,
+      Arc::new(FactAction),
       None::<Box<OutputProcessor<FactResult<u64>, FactResult<u64>>>>,
     ).await;
 ```

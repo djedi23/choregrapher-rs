@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use field_accessor_derive::FieldAccessor;
 use node_rs::{
   builder::GraphInternal,
@@ -7,7 +8,7 @@ use node_rs::{
   output_processor::DefaultOutputProcessor,
   rabbitmq::FieldAccessor,
   start_process::start_process,
-  App,
+  App, NodeAction,
 };
 use serde::{Deserialize, Serialize};
 use std::{ops::Add, sync::Arc, time::Duration};
@@ -22,6 +23,26 @@ enum ProxyData<T: Add> {
   I(T),
 }
 
+#[derive(Debug)]
+struct ProxyAction;
+#[async_trait]
+impl NodeAction for ProxyAction {
+  type INPUT = ProxyData<u64>;
+  type OUTPUT = ProxyData<u64>;
+
+  #[tracing::instrument(name = "Proxy Action", level = "debug")]
+  async fn action(
+    &self,
+    input: Self::INPUT,
+    context: Arc<Context>,
+  ) -> (Option<Self::OUTPUT>, Arc<Context>) {
+    debug!("proxy action {:?}", Paint::cyan(&input));
+    match input {
+      ProxyData::I(i) => (Some(ProxyData::I(i)), context),
+    }
+  }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct SumInput<T: Add> {
   i1: Option<T>,
@@ -31,6 +52,29 @@ struct SumInput<T: Add> {
 #[derive(Serialize, Deserialize, Debug, Clone, FieldAccessor)]
 struct SumOutput<T: Add> {
   o: T,
+}
+
+#[derive(Debug)]
+struct SumAction;
+#[async_trait]
+impl NodeAction for SumAction {
+  type INPUT = SumInput<u64>;
+  type OUTPUT = SumOutput<u64>;
+
+  #[tracing::instrument(name = "Sum Action", level = "debug")]
+  async fn action(
+    &self,
+    input: Self::INPUT,
+    context: Arc<Context>,
+  ) -> (Option<Self::OUTPUT>, Arc<Context>) {
+    debug!("sum action {:?}", input);
+    (
+      Some(SumOutput {
+        o: input.i1.unwrap_or_default() + input.i2.unwrap_or_default(),
+      }),
+      context,
+    )
+  }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, FieldAccessor)]
@@ -113,46 +157,22 @@ async fn main() -> MainResult<()> {
   info!("{:?}", app.settings);
   let gi: GraphInternal = GraphInternal::new(graph.clone(), app.clone());
 
-  #[tracing::instrument(level = "debug")]
-  async fn sum_action(
-    data: SumInput<u64>,
-    _context: Arc<Context>,
-  ) -> (Option<SumOutput<u64>>, Arc<Context>) {
-    debug!("sum action {:?}", data);
-    (
-      Some(SumOutput {
-        o: data.i1.unwrap_or_default() + data.i2.unwrap_or_default(),
-      }),
-      _context,
-    )
-  }
-
   gi.register_node_action(
     "sum",
-    sum_action,
+    Arc::new(SumAction),
     None::<Arc<DefaultOutputProcessor<SumOutput<u64>, SumOutput<u64>>>>,
   )
   .await;
 
-  #[tracing::instrument(level = "debug")]
-  async fn proxy_action(
-    data: ProxyData<u64>,
-    _context: Arc<Context>,
-  ) -> (Option<ProxyData<u64>>, Arc<Context>) {
-    debug!("proxy action {:?}", Paint::cyan(&data));
-    match data {
-      ProxyData::I(i) => (Some(ProxyData::I(i)), _context),
-    }
-  }
   gi.register_node_action(
     "proxy",
-    proxy_action,
+    Arc::new(ProxyAction),
     None::<Arc<DefaultOutputProcessor<ProxyData<u64>, ProxyData<u64>>>>,
   )
   .await;
   gi.register_node_action(
     "proxy1",
-    proxy_action,
+    Arc::new(ProxyAction),
     None::<Arc<DefaultOutputProcessor<ProxyData<u64>, ProxyData<u64>>>>,
   )
   .await;
